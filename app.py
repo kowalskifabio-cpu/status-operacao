@@ -36,8 +36,19 @@ st.sidebar.markdown("---")
 papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):", 
     ["PCP", "Dono do Pedido (DP)", "Produção", "Compras", "Financeiro", "Logística", "Gerência Geral"])
 
+# NOVA ORDENAÇÃO CONFORME SOLICITADO
 menu = st.sidebar.radio("Navegação", 
-    ["🆕 Novo Pedido", "👤 Cadastro de Gestores", "✅ Gate 1: Aceite Técnico", "🏭 Gate 2: Produção", "💰 Gate 3: Material", "🚛 Gate 4: Entrega", "⚠️ Alteração de Pedido", "📊 Resumo e Prazos", "🚨 Auditoria"])
+    [
+        "📊 Resumo e Prazos", 
+        "🚨 Auditoria", 
+        "👤 Cadastro de Gestores", 
+        "🆕 Novo Pedido", 
+        "✅ Gate 1: Aceite Técnico", 
+        "🏭 Gate 2: Produção", 
+        "💰 Gate 3: Material", 
+        "🚛 Gate 4: Entrega", 
+        "⚠️ Alteração de Pedido"
+    ])
 
 # --- FUNÇÃO DE GESTÃO DE GATES (INTEGRAL) ---
 def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg_bloqueio, proximo_status, objetivo, momento):
@@ -88,17 +99,64 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
 
 # --- PÁGINAS ---
 
-if menu == "🆕 Novo Pedido":
+if menu == "📊 Resumo e Prazos":
+    st.header("🚦 Monitor de Pedidos e Prazos")
+    try:
+        df_p = conn.read(worksheet="Pedidos", ttl=0)
+        df_p['Prazo_Entrega'] = pd.to_datetime(df_p['Prazo_Entrega'], errors='coerce')
+        def calcular_dias(row):
+            if pd.isnull(row['Prazo_Entrega']): return None
+            delta = row['Prazo_Entrega'].date() - date.today()
+            return delta.days
+        df_p['Dias_Restantes'] = df_p.apply(calcular_dias, axis=1)
+        def alerta_prazo(dias):
+            if dias is None: return "⚪ SEM DATA"
+            if dias < 0: return "❌ VENCIDO"
+            if dias <= 3: return "🔴 CRÍTICO"
+            if dias <= 7: return "🟡 ATENÇÃO"
+            return "🟢 NO PRAZO"
+        df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
+        st.dataframe(df_p[['Pedido', 'CTR', 'Dono', 'Status_Atual', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao processar resumo: {e}")
+
+elif menu == "🚨 Auditoria":
+    st.header("🚨 Auditoria e Histórico de Alterações")
+    st.error("Qualquer exceção mata o ERCI!")
+    st.subheader("Registros de Mini-Gates (Mudanças de Escopo)")
+    try:
+        df_aud = conn.read(worksheet="Alteracoes", ttl=0)
+        st.table(df_aud)
+    except:
+        st.write("Sem registros de alteração.")
+    st.markdown("---")
+    st.markdown("#### Regras de Burla (Alerta):")
+    st.write("- 'Só dessa vez libera' | - 'É urgente' | - 'Sempre foi assim'")
+
+elif menu == "👤 Cadastro de Gestores":
+    st.header("Cadastro de Gestores (Donos de Pedido)")
+    with st.form("form_gestores"):
+        novo_nome = st.text_input("Nome Completo do Gestor")
+        if st.form_submit_button("Salvar Gestor"):
+            if novo_nome:
+                df_g = conn.read(worksheet="Gestores", ttl=0)
+                conn.update(worksheet="Gestores", data=pd.concat([df_g, pd.DataFrame([{"Nome": novo_nome}])], ignore_index=True))
+                st.success(f"Gestor {novo_nome} cadastrado!")
+    try:
+        df_l = conn.read(worksheet="Gestores", ttl=0)
+        st.table(df_l)
+    except:
+        st.write("Nenhum gestor encontrado.")
+
+elif menu == "🆕 Novo Pedido":
     st.header("Cadastrar Novo Pedido / Obra")
     try:
         df_gestores = conn.read(worksheet="Gestores", ttl=0)
         lista_gestores = df_gestores["Nome"].tolist()
     except:
         lista_gestores = []
-
     if not lista_gestores:
         st.warning("⚠️ Nenhum gestor cadastrado. Vá ao menu 'Cadastro de Gestores' primeiro.")
-
     with st.form("cadastro_pedido"):
         col1, col2 = st.columns(2)
         with col1:
@@ -107,7 +165,6 @@ if menu == "🆕 Novo Pedido":
         with col2:
             gestor_responsavel = st.selectbox("Selecione o Gestor Responsável", lista_gestores)
             prazo = st.date_input("Data Prometida de Entrega", min_value=date.today())
-        
         desc = st.text_area("Descrição")
         if st.form_submit_button("Criar Ficha do Pedido"):
             if nome and ctr and gestor_responsavel:
@@ -122,40 +179,9 @@ if menu == "🆕 Novo Pedido":
                     "Prazo_Entrega": prazo.strftime("%Y-%m-%d")
                 }])
                 conn.update(worksheet="Pedidos", data=pd.concat([df, novo], ignore_index=True))
-                st.success(f"Pedido {nome} cadastrado com sucesso!")
+                st.success(f"Pedido {nome} (CTR: {ctr}) cadastrado com sucesso!")
             else:
                 st.error("Preencha Nome, CTR e selecione um Gestor.")
-
-elif menu == "👤 Cadastro de Gestores":
-    st.header("Cadastro de Gestores (Donos de Pedido)")
-    with st.form("form_gestores"):
-        novo_nome = st.text_input("Nome Completo do Gestor")
-        if st.form_submit_button("Salvar Gestor"):
-            if novo_nome:
-                df_g = conn.read(worksheet="Gestores", ttl=0)
-                conn.update(worksheet="Gestores", data=pd.concat([df_g, pd.DataFrame([{"Nome": novo_nome}])], ignore_index=True))
-                st.success(f"Gestor {novo_nome} cadastrado!")
-
-elif menu == "⚠️ Alteração de Pedido":
-    st.header("🔄 Registro de Alteração de Escopo (Mini-Gate)")
-    st.warning("Mudança de projeto = novo mini-gate. Mudança sem registro não existe.")
-    try:
-        df_p = conn.read(worksheet="Pedidos", ttl=0)
-        pedido_alt = st.selectbox("Selecione o Pedido para Alteração", [""] + df_p["Pedido"].tolist())
-        if pedido_alt:
-            with st.form("form_alteracao"):
-                mudanca = st.text_area("O que mudou no projeto/pedido?")
-                impacto_f = st.selectbox("Impacto Financeiro?", ["Nenhum", "Acréscimo de Valor", "Desconto / Estorno"])
-                impacto_p = st.selectbox("Impacto no Prazo?", ["Mantido", "Prorrogado", "Antecipado"])
-                if st.form_submit_button("Registrar Alteração Oficial"):
-                    if mudanca:
-                        df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                        nova_alt = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": pedido_alt, "Usuario": papel_usuario, "O que mudou": mudanca, "Impacto no Prazo": impacto_p, "Impacto Financeiro": impacto_f}])
-                        conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova_alt], ignore_index=True))
-                        st.success("Alteração registrada no histórico de Auditoria!")
-                    else:
-                        st.error("Descreva a mudança.")
-    except: st.error("Erro ao carregar pedidos.")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {
@@ -190,36 +216,23 @@ elif menu == "🚛 Gate 4: Entrega":
     }
     checklist_gate("GATE 4", "Checklist_G4", itens, "Dono do Pedido (DP)", "Logística", "Produto incompleto, Falta de frota adequada, Prazo não validado. ➡️ Entrega NÃO autorizada", "CONCLUÍDO ✅", "garantir entrega sem retrabalho e improviso", "antes de prometer data ao cliente")
 
-elif menu == "📊 Resumo e Prazos":
-    st.header("🚦 Monitor de Pedidos e Prazos")
+elif menu == "⚠️ Alteração de Pedido":
+    st.header("🔄 Registro de Alteração de Escopo (Mini-Gate)")
+    st.warning("Mudança de projeto = novo mini-gate. Mudança sem registro não existe.")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        df_p['Prazo_Entrega'] = pd.to_datetime(df_p['Prazo_Entrega'], errors='coerce')
-        def calcular_dias(row):
-            if pd.isnull(row['Prazo_Entrega']): return None
-            delta = row['Prazo_Entrega'].date() - date.today()
-            return delta.days
-        df_p['Dias_Restantes'] = df_p.apply(calcular_dias, axis=1)
-        def alerta_prazo(dias):
-            if dias is None: return "⚪ SEM DATA"
-            if dias < 0: return "❌ VENCIDO"
-            if dias <= 3: return "🔴 CRÍTICO"
-            if dias <= 7: return "🟡 ATENÇÃO"
-            return "🟢 NO PRAZO"
-        df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
-        st.dataframe(df_p[['Pedido', 'CTR', 'Dono', 'Status_Atual', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
-    except Exception as e:
-        st.error(f"Erro ao processar resumo: {e}")
-
-elif menu == "🚨 Auditoria":
-    st.header("🚨 Auditoria e Histórico de Alterações")
-    st.error("Qualquer exceção mata o ERCI!")
-    st.subheader("Registros de Mini-Gates (Mudanças de Escopo)")
-    try:
-        df_aud = conn.read(worksheet="Alteracoes", ttl=0)
-        st.table(df_aud)
-    except:
-        st.write("Sem registros de alteração.")
-    st.markdown("---")
-    st.markdown("#### Regras de Burla (Alerta):")
-    st.write("- 'Só dessa vez libera' | - 'É urgente' | - 'Sempre foi assim'")
+        pedido_alt = st.selectbox("Selecione o Pedido para Alteração", [""] + df_p["Pedido"].tolist())
+        if pedido_alt:
+            with st.form("form_alteracao"):
+                mudanca = st.text_area("O que mudou no projeto/pedido?")
+                impacto_f = st.selectbox("Impacto Financeiro?", ["Nenhum", "Acréscimo de Valor", "Desconto / Estorno"])
+                impacto_p = st.selectbox("Impacto no Prazo?", ["Mantido", "Prorrogado", "Antecipado"])
+                if st.form_submit_button("Registrar Alteração Oficial"):
+                    if mudanca:
+                        df_alt = conn.read(worksheet="Alteracoes", ttl=0)
+                        nova_alt = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": pedido_alt, "Usuario": papel_usuario, "O que mudou": mudanca, "Impacto no Prazo": impacto_p, "Impacto Financeiro": impacto_f}])
+                        conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova_alt], ignore_index=True))
+                        st.success("Alteração registrada no histórico de Auditoria!")
+                    else:
+                        st.error("Descreva a mudança.")
+    except: st.error("Erro ao carregar pedidos.")
