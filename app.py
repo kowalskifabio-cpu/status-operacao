@@ -2,14 +2,15 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import time
 
 # Configuração da página
-st.set_page_config(page_title="Status - Gestão de Gates", layout="centered")
+st.set_page_config(page_title="Status - Gestão de Gates", layout="centered", page_icon="🚀")
 
 st.title("🚀 Sistema de Gestão de Gates")
 st.write("Registro oficial de movimentação de pedidos.")
 
-# 1. Inicia a conexão segura (buscando os dados que você colou nos Secrets)
+# 1. Inicia a conexão segura
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
@@ -28,8 +29,25 @@ with st.form(key="gate_form", clear_on_submit=True):
 if submit:
     if pedido:
         try:
-            # Lê o que já existe na planilha (trabalhando na aba "Lancamentos")
-            # Se a aba tiver outro nome, ajuste aqui
+            # Lógica de Decolagem do Foguete (Animação visual)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for percent_complete in range(100):
+                time.sleep(0.01)
+                progress_bar.progress(percent_complete + 1)
+                if percent_complete < 30:
+                    status_text.text("🚀 Preparando motores...")
+                elif percent_complete < 60:
+                    status_text.text("🔥 Ignição...")
+                else:
+                    status_text.text("✨ Decolando!")
+            
+            # Limpa animação
+            progress_bar.empty()
+            status_text.empty()
+
+            # Lê os dados
             df_existente = conn.read(worksheet="Lancamentos", ttl=0)
             
             # Cria a linha nova
@@ -44,15 +62,14 @@ if submit:
             # Junta os dados
             df_final = pd.concat([df_existente, novo_registro], ignore_index=True)
             
-            # Salva de volta no Google Sheets
+            # Salva no Google Sheets
             conn.update(worksheet="Lancamentos", data=df_final)
             
-            st.success(f"✅ Sucesso! {gate} registrado para {pedido}.")
-            st.balloons()
+            st.success(f"🚀 {gate} do pedido {pedido} LANÇADO com sucesso!")
+            st.toast("Foguete decolou!", icon="🚀")
             
         except Exception as e:
-            st.error(f"Erro ao salvar na planilha: {e}")
-            st.info("Dica: Verifique se você compartilhou a planilha com o e-mail da Service Account como 'Editor'.")
+            st.error(f"Erro ao salvar: {e}")
     else:
         st.error("Por favor, preencha o nome do pedido.")
 
@@ -61,6 +78,7 @@ st.markdown("---")
 st.subheader("📋 Histórico Recente")
 try:
     df_vis = conn.read(worksheet="Lancamentos", ttl=0)
-    st.dataframe(df_vis.tail(10), use_container_width=True)
+    # Mostra os 10 mais recentes, invertendo a ordem para o último aparecer no topo
+    st.dataframe(df_vis.iloc[::-1].head(10), use_container_width=True)
 except:
-    st.write("Conectado. Aguardando o primeiro registro para exibir o histórico.")
+    st.write("Conectado. Aguardando o primeiro registro...")
