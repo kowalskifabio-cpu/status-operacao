@@ -140,8 +140,11 @@ elif menu == "🚨 Auditoria":
     st.subheader("Registros de Mini-Gates (Mudanças de Escopo)")
     try:
         df_aud = conn.read(worksheet="Alteracoes", ttl=0)
-        # Exibindo a tabela com a coluna CTR
-        st.dataframe(df_aud, use_container_width=True)
+        # Ajustado para exibir a coluna CTR no dataframe
+        colunas_exibicao = ['Data', 'Pedido', 'CTR', 'Usuario', 'O que mudou', 'Impacto no Prazo', 'Impacto Financeiro']
+        # Verifica se as colunas existem antes de filtrar para evitar erro se a planilha não estiver atualizada
+        colunas_reais = [col for col in colunas_exibicao if col in df_aud.columns]
+        st.dataframe(df_aud[colunas_reais], use_container_width=True)
     except:
         st.write("Sem registros de alteração.")
     st.markdown("---")
@@ -241,7 +244,6 @@ elif menu == "⚠️ Alteração de Pedido":
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         pedido_alt = st.selectbox("Selecione o Pedido para Alteração", [""] + df_p["Pedido"].tolist())
         if pedido_alt:
-            # Captura a CTR do pedido selecionado
             ctr_vinculada = df_p.loc[df_p['Pedido'] == pedido_alt, 'CTR'].values[0]
             
             with st.form("form_alteracao"):
@@ -256,7 +258,7 @@ elif menu == "⚠️ Alteração de Pedido":
                         nova_alt = pd.DataFrame([{
                             "Data": datetime.now().strftime("%d/%m/%Y %H:%M"), 
                             "Pedido": pedido_alt, 
-                            "CTR": ctr_vinculada, # SALVANDO A CTR
+                            "CTR": ctr_vinculada,
                             "Usuario": papel_usuario, 
                             "O que mudou": mudanca, 
                             "Impacto no Prazo": impacto_p, 
