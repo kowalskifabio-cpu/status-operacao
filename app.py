@@ -36,7 +36,7 @@ st.sidebar.markdown("---")
 papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):", 
     ["PCP", "Dono do Pedido (DP)", "Produção", "Compras", "Financeiro", "Logística", "Gerência Geral"])
 
-# NOVA ORDENAÇÃO CONFORME SOLICITADO
+# ORDENAÇÃO MANTIDA
 menu = st.sidebar.radio("Navegação", 
     [
         "📊 Resumo e Prazos", 
@@ -50,7 +50,7 @@ menu = st.sidebar.radio("Navegação",
         "⚠️ Alteração de Pedido"
     ])
 
-# --- FUNÇÃO DE GESTÃO DE GATES (INTEGRAL) ---
+# --- FUNÇÃO DE GESTÃO DE GATES (INTEGRAL COM TRAVA DE RE-APROVAÇÃO) ---
 def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg_bloqueio, proximo_status, objetivo, momento):
     st.header(f"Ficha de Controle: {gate_id}")
     st.markdown(f"**Objetivo:** {objetivo}")
@@ -60,6 +60,26 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
     try:
         df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
         pedido_sel = st.selectbox(f"Selecione o Pedido para {gate_id}", [""] + df_pedidos["Pedido"].tolist(), key=f"sel_{aba}")
+        
+        # BUSCA O STATUS ATUAL DO PEDIDO PARA TRAVA
+        if pedido_sel:
+            status_atual = df_pedidos.loc[df_pedidos['Pedido'] == pedido_sel, 'Status_Atual'].values[0]
+            
+            # Lógica de trava: Se o status já passou deste gate, avisa e bloqueia o formulário
+            # Se proximo_status já foi alcançado ou passado
+            concluido = False
+            if gate_id == "GATE 1" and status_atual != "Aguardando Gate 1": concluido = True
+            elif gate_id == "GATE 2" and status_atual not in ["Aguardando Gate 1", "Aguardando Produção (G2)"]: concluido = True
+            elif gate_id == "GATE 3" and status_atual not in ["Aguardando Gate 1", "Aguardando Produção (G2)", "Aguardando Materiais (G3)"]: concluido = True
+            elif gate_id == "GATE 4" and status_atual == "CONCLUÍDO ✅": concluido = True
+
+            if concluido:
+                st.warning(f"✅ Este Gate já foi aprovado anteriormente. O status atual do pedido é: **{status_atual}**.")
+                # Se for Gerência Geral, pode habilitar uma edição, caso contrário, encerra aqui
+                if papel_usuario != "Gerência Geral":
+                    st.info("Somente a Gerência Geral pode re-validar gates concluídos.")
+                    return
+
     except:
         st.error("Erro ao ler aba Pedidos.")
         return
@@ -155,8 +175,7 @@ elif menu == "🆕 Novo Pedido":
         lista_gestores = df_gestores["Nome"].tolist()
     except:
         lista_gestores = []
-    if not lista_gestores:
-        st.warning("⚠️ Nenhum gestor cadastrado. Vá ao menu 'Cadastro de Gestores' primeiro.")
+    
     with st.form("cadastro_pedido"):
         col1, col2 = st.columns(2)
         with col1:
@@ -166,20 +185,26 @@ elif menu == "🆕 Novo Pedido":
             gestor_responsavel = st.selectbox("Selecione o Gestor Responsável", lista_gestores)
             prazo = st.date_input("Data Prometida de Entrega", min_value=date.today())
         desc = st.text_area("Descrição")
+        
         if st.form_submit_button("Criar Ficha do Pedido"):
             if nome and ctr and gestor_responsavel:
                 df = conn.read(worksheet="Pedidos", ttl=0)
-                novo = pd.DataFrame([{
-                    "Data": date.today().strftime("%d/%m/%Y"), 
-                    "Pedido": nome, 
-                    "CTR": ctr,
-                    "Descricao": desc, 
-                    "Dono": gestor_responsavel, 
-                    "Status_Atual": "Aguardando Gate 1", 
-                    "Prazo_Entrega": prazo.strftime("%Y-%m-%d")
-                }])
-                conn.update(worksheet="Pedidos", data=pd.concat([df, novo], ignore_index=True))
-                st.success(f"Pedido {nome} (CTR: {ctr}) cadastrado com sucesso!")
+                
+                # BLOQUEIO DE CTR DUPLICADA
+                if ctr in df['CTR'].astype(str).values:
+                    st.error(f"❌ Erro: O CTR {ctr} já está cadastrado no sistema. Use um número único.")
+                else:
+                    novo = pd.DataFrame([{
+                        "Data": date.today().strftime("%d/%m/%Y"), 
+                        "Pedido": nome, 
+                        "CTR": ctr,
+                        "Descricao": desc, 
+                        "Dono": gestor_responsavel, 
+                        "Status_Atual": "Aguardando Gate 1", 
+                        "Prazo_Entrega": prazo.strftime("%Y-%m-%d")
+                    }])
+                    conn.update(worksheet="Pedidos", data=pd.concat([df, novo], ignore_index=True))
+                    st.success(f"Pedido {nome} (CTR: {ctr}) cadastrado com sucesso!")
             else:
                 st.error("Preencha Nome, CTR e selecione um Gestor.")
 
