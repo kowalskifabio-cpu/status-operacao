@@ -2,83 +2,117 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
-import time
 
 # Configuração da página
-st.set_page_config(page_title="Status - Gestão de Gates", layout="centered", page_icon="🚀")
+st.set_page_config(page_title="Status Marcenaria - Operacional", layout="wide", page_icon="🏭")
 
-st.title("🚀 Sistema de Gestão de Gates")
-st.write("Registro oficial de movimentação de pedidos.")
+# Estilização Status
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    h1, h2, h3 { color: #634D3E !important; }
+    .stButton>button { background-color: #634D3E; color: white; width: 100%; }
+    .stExpander { border: 1px solid #B59572; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# 1. Inicia a conexão segura
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-except Exception as e:
-    st.error(f"Erro na conexão com os Secrets: {e}")
+# Conexão
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. Formulário de Entrada
-with st.form(key="gate_form", clear_on_submit=True):
-    pedido = st.text_input("Nome/Número do Pedido")
-    gate = st.selectbox("Selecione o Gate", ["Gate 1 - Aceite", "Gate 2 - Produção", "Gate 3 - Material", "Gate 4 - Logística"])
-    responsavel = st.selectbox("Quem está validando?", ["Wilson", "Dono do Pedido A", "Dono do Pedido B"])
-    obs = st.text_area("Observações")
+# Menu Lateral
+menu = st.sidebar.selectbox("Menu Principal", 
+    ["🆕 Cadastrar Pedido", "✅ Gate 1: Aceite Técnico", "🏭 Gate 2: Produção", "💰 Gate 3: Material", "🚛 Gate 4: Entrega", "📊 Painel de Controle"])
+
+# --- 1. CADASTRO INICIAL ---
+if menu == "🆕 Cadastrar Pedido":
+    st.header("Novo Pedido / Obra")
+    with st.form("cadastro_pedido"):
+        nome_pedido = st.text_input("Nome do Pedido / Cliente")
+        descricao = st.text_area("Breve Descrição do Escopo")
+        dono = st.selectbox("Dono do Pedido (Responsável)", ["Wilson", "Responsável A", "Responsável B"])
+        submit = st.form_submit_button("Criar Ficha do Pedido")
+        
+        if submit and nome_pedido:
+            df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
+            novo_p = pd.DataFrame([{"Data": datetime.now(), "Pedido": nome_pedido, "Descricao": descricao, "Dono": dono, "Status": "Aguardando G1"}])
+            updated = pd.concat([df_pedidos, novo_p], ignore_index=True)
+            conn.update(worksheet="Pedidos", data=updated)
+            st.success("Pedido criado! Vá para o Gate 1 para validar.")
+
+# --- FUNÇÃO PARA GERAR FORMULÁRIO DE GATE ---
+def gerar_formulario_gate(gate_nome, aba, checklist_itens, criterios_bloqueio):
+    st.header(f"Ficha de Checklist - {gate_nome}")
     
-    submit = st.form_submit_button("Registrar Lançamento")
+    # Busca pedidos cadastrados
+    pedidos_df = conn.read(worksheet="Pedidos", ttl=0)
+    lista_pedidos = pedidos_df["Pedido"].tolist()
+    
+    pedido_sel = st.selectbox("Selecione o Pedido", lista_pedidos)
+    
+    st.info(f"**Responsável:** {gate_nome}")
+    
+    with st.form(f"form_{aba}"):
+        respostas = {}
+        st.subheader("Checklist Obrigatório")
+        
+        # Renderiza os itens do checklist (conforme imagens enviadas)
+        for secao, itens in checklist_itens.items():
+            st.markdown(f"**🔹 {secao}**")
+            for item in itens:
+                respostas[item] = st.checkbox(item)
+        
+        obs = st.text_area("Observações Técnicas")
+        confirmar = st.form_submit_button("Registrar Validação")
+        
+        if confirmar:
+            # Verifica critério de bloqueio
+            if not all(respostas.values()):
+                st.error(f"❌ **BLOQUEIO:** {criterios_bloqueio}")
+            else:
+                df_gate = conn.read(worksheet=aba, ttl=0)
+                dados = {"Data": datetime.now(), "Pedido": pedido_sel, "Validador": "Sistema"}
+                dados.update(respostas)
+                dados["Observacoes"] = obs
+                
+                updated = pd.concat([df_gate, pd.DataFrame([dados])], ignore_index=True)
+                conn.update(worksheet=aba, data=updated)
+                st.success(f"🚀 Foguete decolou! {gate_nome} validado.")
 
-# 3. Processamento do Lançamento
-if submit:
-    if pedido:
-        try:
-            # Lógica de Decolagem do Foguete (Animação visual)
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for percent_complete in range(100):
-                time.sleep(0.01)
-                progress_bar.progress(percent_complete + 1)
-                if percent_complete < 30:
-                    status_text.text("🚀 Preparando motores...")
-                elif percent_complete < 60:
-                    status_text.text("🔥 Ignição...")
-                else:
-                    status_text.text("✨ Decolando!")
-            
-            # Limpa animação
-            progress_bar.empty()
-            status_text.empty()
+# --- MENUS DE GATES (DADOS DAS IMAGENS) ---
+if menu == "✅ Gate 1: Aceite Técnico":
+    itens = {
+        "Informações Comerciais": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"],
+        "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais definidos", "Itens fora do padrão identificados"],
+        "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado tecnicamente", "Risco de prazo identificado"],
+        "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Pedido aprovado formalmente"]
+    }
+    gerar_formulario_gate("Gate 1", "Checklist_G1", itens, "Projeto incompleto, Dono indefinido ou Prazo inviável.")
 
-            # Lê os dados
-            df_existente = conn.read(worksheet="Lancamentos", ttl=0)
-            
-            # Cria a linha nova
-            novo_registro = pd.DataFrame([{
-                "Data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                "Pedido": pedido,
-                "Gate": gate,
-                "Responsavel": responsavel,
-                "Observacoes": obs
-            }])
-            
-            # Junta os dados
-            df_final = pd.concat([df_existente, novo_registro], ignore_index=True)
-            
-            # Salva no Google Sheets
-            conn.update(worksheet="Lancamentos", data=df_final)
-            
-            st.success(f"🚀 {gate} do pedido {pedido} LANÇADO com sucesso!")
-            st.toast("Foguete decolou!", icon="🚀")
-            
-        except Exception as e:
-            st.error(f"Erro ao salvar: {e}")
-    else:
-        st.error("Por favor, preencha o nome do pedido.")
+elif menu == "🏭 Gate 2: Produção":
+    itens = {
+        "Planejamento": ["Pedido sequenciado", "Capacidade validada", "Gargalo identificado", "Gargalo protegido no plano"],
+        "Projeto": ["Projeto técnico liberado", "Medidas conferidas", "Versão do projeto registrada"],
+        "Comunicação": ["Produção ciente do plano", "Prazo interno registrado", "Alterações registradas"]
+    }
+    gerar_formulario_gate("Gate 2", "Checklist_G2", itens, "Pedido fora da sequência, Gargalo saturado ou sem liberação formal.")
 
-# 4. Histórico para visualização rápida
-st.markdown("---")
-st.subheader("📋 Histórico Recente")
-try:
-    df_vis = conn.read(worksheet="Lancamentos", ttl=0)
-    # Mostra os 10 mais recentes, invertendo a ordem para o último aparecer no topo
-    st.dataframe(df_vis.iloc[::-1].head(10), use_container_width=True)
-except:
-    st.write("Conectado. Aguardando o primeiro registro...")
+elif menu == "💰 Gate 3: Material":
+    itens = {
+        "Materiais": ["Lista de materiais validada", "Quantidades conferidas", "Materiais especiais identificados"],
+        "Compras": ["Fornecedores definidos", "Lead times confirmados", "Datas de entrega registradas"],
+        "Financeiro": ["Impacto no caixa validado", "Compra autorizada formalmente", "Forma de pagamento definida"]
+    }
+    gerar_formulario_gate("Gate 3", "Checklist_G3", itens, "Material crítico não comprado ou impacto financeiro não aprovado.")
+
+elif menu == "🚛 Gate 4: Entrega":
+    itens = {
+        "Produto": ["Produção concluída", "Qualidade conferida", "Itens separados por pedido"],
+        "Logística": ["Checklist de carga preenchido", "Frota definida", "Rota planejada"],
+        "Prazo": ["Data validada com logística", "Cliente informado", "Equipe de montagem alinhada"]
+    }
+    gerar_formulario_gate("Gate 4", "Checklist_G4", itens, "Produto incompleto, falta de frota ou prazo não validado.")
+
+elif menu == "📊 Painel de Controle":
+    st.header("Status Geral dos Pedidos")
+    df_p = conn.read(worksheet="Pedidos", ttl=0)
+    st.dataframe(df_p, use_container_width=True)
