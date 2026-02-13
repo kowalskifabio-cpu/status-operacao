@@ -37,7 +37,7 @@ papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):",
     ["PCP", "Dono do Pedido (DP)", "Produção", "Compras", "Financeiro", "Logística", "Gerência Geral"])
 
 menu = st.sidebar.radio("Navegação", 
-    ["🆕 Novo Pedido", "✅ Gate 1: Aceite Técnico", "🏭 Gate 2: Produção", "💰 Gate 3: Material", "🚛 Gate 4: Entrega", "📊 Resumo e Prazos", "🚨 Auditoria"])
+    ["🆕 Novo Pedido", "👤 Gestores", "✅ Gate 1: Aceite Técnico", "🏭 Gate 2: Produção", "💰 Gate 3: Material", "🚛 Gate 4: Entrega", "📊 Resumo e Prazos", "🚨 Auditoria"])
 
 # --- FUNÇÃO DE GESTÃO DE GATES (INTEGRAL) ---
 def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg_bloqueio, proximo_status, objetivo, momento):
@@ -90,18 +90,48 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
 
 if menu == "🆕 Novo Pedido":
     st.header("Cadastrar Novo Pedido / Obra")
+    
+    # Busca lista de gestores dinâmica da planilha
+    try:
+        df_gestores = conn.read(worksheet="Gestores", ttl=0)
+        lista_gestores = df_gestores["Nome"].tolist()
+    except:
+        lista_gestores = ["Cadastre um gestor primeiro"]
+
     with st.form("cadastro_pedido"):
         nome = st.text_input("Nome do Pedido")
         desc = st.text_area("Descrição")
+        dono = st.selectbox("Dono do Pedido (Gestor)", lista_gestores)
         prazo = st.date_input("Data Prometida de Entrega", min_value=date.today())
         if st.form_submit_button("Criar Ficha do Pedido"):
-            if nome:
+            if nome and dono != "Cadastre um gestor primeiro":
                 df = conn.read(worksheet="Pedidos", ttl=0)
-                novo = pd.DataFrame([{"Data": date.today().strftime("%d/%m/%Y"), "Pedido": nome, "Descricao": desc, "Dono": papel_usuario, "Status_Atual": "Aguardando Gate 1", "Prazo_Entrega": prazo.strftime("%Y-%m-%d")}])
+                novo = pd.DataFrame([{"Data": date.today().strftime("%d/%m/%Y"), "Pedido": nome, "Descricao": desc, "Dono": dono, "Status_Atual": "Aguardando Gate 1", "Prazo_Entrega": prazo.strftime("%Y-%m-%d")}])
                 conn.update(worksheet="Pedidos", data=pd.concat([df, novo], ignore_index=True))
                 st.success(f"Pedido {nome} cadastrado!")
             else:
-                st.error("O nome do pedido é obrigatório.")
+                st.error("Campos obrigatórios faltando.")
+
+elif menu == "👤 Gestores":
+    st.header("Gestão de Donos de Pedido (Gestores)")
+    
+    with st.form("cadastro_gestor"):
+        novo_gestor = st.text_input("Nome do Novo Gestor")
+        if st.form_submit_button("Adicionar Gestor"):
+            if novo_gestor:
+                df_g = conn.read(worksheet="Gestores", ttl=0)
+                novo_g = pd.DataFrame([{"Nome": novo_gestor}])
+                conn.update(worksheet="Gestores", data=pd.concat([df_g, novo_g], ignore_index=True))
+                st.success(f"Gestor {novo_gestor} adicionado!")
+            else:
+                st.error("Digite o nome do gestor.")
+    
+    st.subheader("Gestores Cadastrados")
+    try:
+        df_list = conn.read(worksheet="Gestores", ttl=0)
+        st.dataframe(df_list, use_container_width=True)
+    except:
+        st.write("Nenhum gestor cadastrado.")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {
@@ -140,14 +170,10 @@ elif menu == "📊 Resumo e Prazos":
     st.header("🚦 Monitor de Pedidos e Prazos")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        
-        # Converte coluna para data de forma segura, tratando erros como NaT (vazio)
         df_p['Prazo_Entrega'] = pd.to_datetime(df_p['Prazo_Entrega'], errors='coerce')
         
-        # Filtra apenas linhas que têm data válida para calcular dias restantes
         def calcular_dias(row):
-            if pd.isnull(row['Prazo_Entrega']):
-                return None
+            if pd.isnull(row['Prazo_Entrega']): return None
             delta = row['Prazo_Entrega'].date() - date.today()
             return delta.days
 
@@ -161,11 +187,8 @@ elif menu == "📊 Resumo e Prazos":
             return "🟢 NO PRAZO"
         
         df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
-        
-        # Formata a data para exibição brasileira
         df_p['Prazo_Exibicao'] = df_p['Prazo_Entrega'].dt.strftime('%d/%m/%Y').fillna("Não Definido")
-        
-        st.dataframe(df_p[['Pedido', 'Status_Atual', 'Prazo_Exibicao', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
+        st.dataframe(df_p[['Pedido', 'Dono', 'Status_Atual', 'Prazo_Exibicao', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
     except Exception as e:
         st.error(f"Erro ao processar resumo: {e}")
 
