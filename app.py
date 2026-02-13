@@ -37,7 +37,7 @@ papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):",
     ["PCP", "Dono do Pedido (DP)", "Produção", "Compras", "Financeiro", "Logística", "Gerência Geral"])
 
 menu = st.sidebar.radio("Navegação", 
-    ["🆕 Novo Pedido", "👤 Gestores", "✅ Gate 1: Aceite Técnico", "🏭 Gate 2: Produção", "💰 Gate 3: Material", "🚛 Gate 4: Entrega", "📊 Resumo e Prazos", "🚨 Auditoria"])
+    ["🆕 Novo Pedido", "👤 Cadastro de Gestores", "✅ Gate 1: Aceite Técnico", "🏭 Gate 2: Produção", "💰 Gate 3: Material", "🚛 Gate 4: Entrega", "📊 Resumo e Prazos", "🚨 Auditoria"])
 
 # --- FUNÇÃO DE GESTÃO DE GATES (INTEGRAL) ---
 def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg_bloqueio, proximo_status, objetivo, momento):
@@ -91,47 +91,60 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
 if menu == "🆕 Novo Pedido":
     st.header("Cadastrar Novo Pedido / Obra")
     
-    # Busca lista de gestores dinâmica da planilha
+    # Busca a lista de gestores da planilha
     try:
         df_gestores = conn.read(worksheet="Gestores", ttl=0)
         lista_gestores = df_gestores["Nome"].tolist()
     except:
-        lista_gestores = ["Cadastre um gestor primeiro"]
+        lista_gestores = []
+
+    if not lista_gestores:
+        st.warning("⚠️ Nenhum gestor cadastrado. Vá ao menu 'Cadastro de Gestores' primeiro.")
 
     with st.form("cadastro_pedido"):
         nome = st.text_input("Nome do Pedido")
         desc = st.text_area("Descrição")
-        dono = st.selectbox("Dono do Pedido (Gestor)", lista_gestores)
+        # Substituído: Agora usa a lista vinda da planilha
+        gestor_responsavel = st.selectbox("Selecione o Gestor Responsável", lista_gestores)
         prazo = st.date_input("Data Prometida de Entrega", min_value=date.today())
+        
         if st.form_submit_button("Criar Ficha do Pedido"):
-            if nome and dono != "Cadastre um gestor primeiro":
+            if nome and gestor_responsavel:
                 df = conn.read(worksheet="Pedidos", ttl=0)
-                novo = pd.DataFrame([{"Data": date.today().strftime("%d/%m/%Y"), "Pedido": nome, "Descricao": desc, "Dono": dono, "Status_Atual": "Aguardando Gate 1", "Prazo_Entrega": prazo.strftime("%Y-%m-%d")}])
+                novo = pd.DataFrame([{
+                    "Data": date.today().strftime("%d/%m/%Y"), 
+                    "Pedido": nome, 
+                    "Descricao": desc, 
+                    "Dono": gestor_responsavel, 
+                    "Status_Atual": "Aguardando Gate 1", 
+                    "Prazo_Entrega": prazo.strftime("%Y-%m-%d")
+                }])
                 conn.update(worksheet="Pedidos", data=pd.concat([df, novo], ignore_index=True))
-                st.success(f"Pedido {nome} cadastrado!")
+                st.success(f"Pedido {nome} sob responsabilidade de {gestor_responsavel} cadastrado!")
             else:
-                st.error("Campos obrigatórios faltando.")
+                st.error("Preencha o nome do pedido e selecione um gestor.")
 
-elif menu == "👤 Gestores":
-    st.header("Gestão de Donos de Pedido (Gestores)")
+elif menu == "👤 Cadastro de Gestores":
+    st.header("Cadastro de Gestores (Donos de Pedido)")
+    st.info("Adicione aqui os nomes dos gestores que aparecerão no cadastro de pedidos.")
     
-    with st.form("cadastro_gestor"):
-        novo_gestor = st.text_input("Nome do Novo Gestor")
-        if st.form_submit_button("Adicionar Gestor"):
-            if novo_gestor:
+    with st.form("form_gestores"):
+        novo_nome = st.text_input("Nome Completo do Gestor")
+        if st.form_submit_button("Salvar Gestor"):
+            if novo_nome:
                 df_g = conn.read(worksheet="Gestores", ttl=0)
-                novo_g = pd.DataFrame([{"Nome": novo_gestor}])
+                novo_g = pd.DataFrame([{"Nome": novo_nome}])
                 conn.update(worksheet="Gestores", data=pd.concat([df_g, novo_g], ignore_index=True))
-                st.success(f"Gestor {novo_gestor} adicionado!")
+                st.success(f"Gestor {novo_nome} cadastrado com sucesso!")
             else:
-                st.error("Digite o nome do gestor.")
+                st.error("Digite um nome válido.")
     
     st.subheader("Gestores Cadastrados")
     try:
-        df_list = conn.read(worksheet="Gestores", ttl=0)
-        st.dataframe(df_list, use_container_width=True)
+        df_l = conn.read(worksheet="Gestores", ttl=0)
+        st.table(df_l)
     except:
-        st.write("Nenhum gestor cadastrado.")
+        st.write("Nenhum gestor encontrado.")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {
@@ -171,24 +184,19 @@ elif menu == "📊 Resumo e Prazos":
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         df_p['Prazo_Entrega'] = pd.to_datetime(df_p['Prazo_Entrega'], errors='coerce')
-        
         def calcular_dias(row):
             if pd.isnull(row['Prazo_Entrega']): return None
             delta = row['Prazo_Entrega'].date() - date.today()
             return delta.days
-
         df_p['Dias_Restantes'] = df_p.apply(calcular_dias, axis=1)
-        
         def alerta_prazo(dias):
             if dias is None: return "⚪ SEM DATA"
             if dias < 0: return "❌ VENCIDO"
             if dias <= 3: return "🔴 CRÍTICO"
             if dias <= 7: return "🟡 ATENÇÃO"
             return "🟢 NO PRAZO"
-        
         df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
-        df_p['Prazo_Exibicao'] = df_p['Prazo_Entrega'].dt.strftime('%d/%m/%Y').fillna("Não Definido")
-        st.dataframe(df_p[['Pedido', 'Dono', 'Status_Atual', 'Prazo_Exibicao', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
+        st.dataframe(df_p[['Pedido', 'Dono', 'Status_Atual', 'Prazo_Entrega', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
     except Exception as e:
         st.error(f"Erro ao processar resumo: {e}")
 
