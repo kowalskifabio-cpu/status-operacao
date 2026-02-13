@@ -61,12 +61,9 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
         df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
         pedido_sel = st.selectbox(f"Selecione o Pedido para {gate_id}", [""] + df_pedidos["Pedido"].tolist(), key=f"sel_{aba}")
         
-        # BUSCA O STATUS ATUAL DO PEDIDO PARA TRAVA
         if pedido_sel:
             status_atual = df_pedidos.loc[df_pedidos['Pedido'] == pedido_sel, 'Status_Atual'].values[0]
             
-            # Lógica de trava: Se o status já passou deste gate, avisa e bloqueia o formulário
-            # Se proximo_status já foi alcançado ou passado
             concluido = False
             if gate_id == "GATE 1" and status_atual != "Aguardando Gate 1": concluido = True
             elif gate_id == "GATE 2" and status_atual not in ["Aguardando Gate 1", "Aguardando Produção (G2)"]: concluido = True
@@ -75,18 +72,15 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
 
             if concluido:
                 st.warning(f"✅ Este Gate já foi aprovado anteriormente. O status atual do pedido é: **{status_atual}**.")
-                # Se for Gerência Geral, pode habilitar uma edição, caso contrário, encerra aqui
                 if papel_usuario != "Gerência Geral":
                     st.info("Somente a Gerência Geral pode re-validar gates concluídos.")
                     return
-
     except:
         st.error("Erro ao ler aba Pedidos.")
         return
 
     if pedido_sel:
         pode_assinar = (papel_usuario == responsavel_r or papel_usuario == executor_e or papel_usuario == "Gerência Geral")
-        
         if not pode_assinar:
             st.warning(f"⚠️ Acesso limitado: Apenas {responsavel_r} ou {executor_e} validam este Gate.")
 
@@ -146,6 +140,7 @@ elif menu == "🚨 Auditoria":
     st.subheader("Registros de Mini-Gates (Mudanças de Escopo)")
     try:
         df_aud = conn.read(worksheet="Alteracoes", ttl=0)
+        # Exibindo a CTR na tabela de auditoria para facilitar conferência
         st.table(df_aud)
     except:
         st.write("Sem registros de alteração.")
@@ -189,8 +184,6 @@ elif menu == "🆕 Novo Pedido":
         if st.form_submit_button("Criar Ficha do Pedido"):
             if nome and ctr and gestor_responsavel:
                 df = conn.read(worksheet="Pedidos", ttl=0)
-                
-                # BLOQUEIO DE CTR DUPLICADA
                 if ctr in df['CTR'].astype(str).values:
                     st.error(f"❌ Erro: O CTR {ctr} já está cadastrado no sistema. Use um número único.")
                 else:
@@ -248,14 +241,27 @@ elif menu == "⚠️ Alteração de Pedido":
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         pedido_alt = st.selectbox("Selecione o Pedido para Alteração", [""] + df_p["Pedido"].tolist())
         if pedido_alt:
+            # Captura a CTR do pedido selecionado
+            ctr_vinculada = df_p.loc[df_p['Pedido'] == pedido_alt, 'CTR'].values[0]
+            
             with st.form("form_alteracao"):
+                st.info(f"📍 Pedido selecionado: {pedido_alt} | CTR: {ctr_vinculada}")
                 mudanca = st.text_area("O que mudou no projeto/pedido?")
                 impacto_f = st.selectbox("Impacto Financeiro?", ["Nenhum", "Acréscimo de Valor", "Desconto / Estorno"])
                 impacto_p = st.selectbox("Impacto no Prazo?", ["Mantido", "Prorrogado", "Antecipado"])
+                
                 if st.form_submit_button("Registrar Alteração Oficial"):
                     if mudanca:
                         df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                        nova_alt = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": pedido_alt, "Usuario": papel_usuario, "O que mudou": mudanca, "Impacto no Prazo": impacto_p, "Impacto Financeiro": impacto_f}])
+                        nova_alt = pd.DataFrame([{
+                            "Data": datetime.now().strftime("%d/%m/%Y %H:%M"), 
+                            "Pedido": pedido_alt, 
+                            "CTR": ctr_vinculada, # SALVANDO A CTR NA AUDITORIA
+                            "Usuario": papel_usuario, 
+                            "O que mudou": mudanca, 
+                            "Impacto no Prazo": impacto_p, 
+                            "Impacto Financeiro": impacto_f
+                        }])
                         conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova_alt], ignore_index=True))
                         st.success("Alteração registrada no histórico de Auditoria!")
                     else:
