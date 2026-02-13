@@ -33,7 +33,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # --- FUNÇÃO: ATUALIZA O STATUS NO RESUMO ---
 def atualizar_quadro_resumo(identificador_composto, novo_status):
     # Extrai o nome do pedido da string composta "CTR / Pedido"
-    nome_pedido = identificador_composto.split(" / ")[1]
+    nome_pedido = identificador_composto.split(" - ")[1]
     df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
     df_pedidos.loc[df_pedidos['Pedido'] == nome_pedido, 'Status_Atual'] = novo_status
     conn.update(worksheet="Pedidos", data=df_pedidos)
