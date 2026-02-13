@@ -73,17 +73,20 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
                 if not all(respostas.values()):
                     st.error(f"❌ CRITÉRIOS DE BLOQUEIO: {msg_bloqueio}")
                 else:
-                    df_gate = conn.read(worksheet=aba, ttl=0)
-                    nova_linha = {"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": pedido_sel, "Validado_Por": papel_usuario, "Obs": obs}
-                    nova_linha.update(respostas)
-                    updated_df = pd.concat([df_gate, pd.DataFrame([nova_linha])], ignore_index=True)
-                    conn.update(worksheet=aba, data=updated_df)
-                    
-                    atualizar_quadro_resumo(pedido_sel, proximo_status)
-                    st.success(f"🚀 Sucesso! Pedido avançou para: {proximo_status}")
-                    st.balloons()
+                    try:
+                        df_gate = conn.read(worksheet=aba, ttl=0)
+                        nova_linha = {"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": pedido_sel, "Validado_Por": papel_usuario, "Obs": obs}
+                        nova_linha.update(respostas)
+                        updated_df = pd.concat([df_gate, pd.DataFrame([nova_linha])], ignore_index=True)
+                        conn.update(worksheet=aba, data=updated_df)
+                        
+                        atualizar_quadro_resumo(pedido_sel, proximo_status)
+                        st.success(f"🚀 Sucesso! Pedido avançou para: {proximo_status}")
+                        st.balloons()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
-# --- CONTEÚDO INTEGRAL DOS GATES ---
+# --- PÁGINAS ---
 
 if menu == "🆕 Novo Pedido":
     st.header("Cadastrar Novo Pedido / Obra")
@@ -97,6 +100,8 @@ if menu == "🆕 Novo Pedido":
                 novo = pd.DataFrame([{"Data": date.today().strftime("%d/%m/%Y"), "Pedido": nome, "Descricao": desc, "Dono": papel_usuario, "Status_Atual": "Aguardando Gate 1", "Prazo_Entrega": prazo.strftime("%Y-%m-%d")}])
                 conn.update(worksheet="Pedidos", data=pd.concat([df, novo], ignore_index=True))
                 st.success(f"Pedido {nome} cadastrado!")
+            else:
+                st.error("O nome do pedido é obrigatório.")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {
@@ -133,21 +138,40 @@ elif menu == "🚛 Gate 4: Entrega":
 
 elif menu == "📊 Resumo e Prazos":
     st.header("🚦 Monitor de Pedidos e Prazos")
-    df_p = conn.read(worksheet="Pedidos", ttl=0)
-    df_p['Prazo_Entrega'] = pd.to_datetime(df_p['Prazo_Entrega'])
-    df_p['Dias_Restantes'] = (df_p['Prazo_Entrega'].dt.date - date.today()).apply(lambda x: x.days)
-    def alerta_prazo(dias):
-        if dias < 0: return "❌ VENCIDO"
-        if dias <= 3: return "🔴 CRÍTICO"
-        if dias <= 7: return "🟡 ATENÇÃO"
-        return "🟢 NO PRAZO"
-    df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
-    st.dataframe(df_p[['Pedido', 'Status_Atual', 'Prazo_Entrega', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes'), use_container_width=True)
+    try:
+        df_p = conn.read(worksheet="Pedidos", ttl=0)
+        
+        # Converte coluna para data de forma segura, tratando erros como NaT (vazio)
+        df_p['Prazo_Entrega'] = pd.to_datetime(df_p['Prazo_Entrega'], errors='coerce')
+        
+        # Filtra apenas linhas que têm data válida para calcular dias restantes
+        def calcular_dias(row):
+            if pd.isnull(row['Prazo_Entrega']):
+                return None
+            delta = row['Prazo_Entrega'].date() - date.today()
+            return delta.days
+
+        df_p['Dias_Restantes'] = df_p.apply(calcular_dias, axis=1)
+        
+        def alerta_prazo(dias):
+            if dias is None: return "⚪ SEM DATA"
+            if dias < 0: return "❌ VENCIDO"
+            if dias <= 3: return "🔴 CRÍTICO"
+            if dias <= 7: return "🟡 ATENÇÃO"
+            return "🟢 NO PRAZO"
+        
+        df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
+        
+        # Formata a data para exibição brasileira
+        df_p['Prazo_Exibicao'] = df_p['Prazo_Entrega'].dt.strftime('%d/%m/%Y').fillna("Não Definido")
+        
+        st.dataframe(df_p[['Pedido', 'Status_Atual', 'Prazo_Exibicao', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao processar resumo: {e}")
 
 elif menu == "🚨 Auditoria":
     st.header("🚨 Auditoria de Governança")
     st.error("Qualquer exceção mata o ERCI!")
-    st.markdown("#### Onde normalmente tentam burlar (alerta):")
     st.write("- 'Só dessa vez libera'")
     st.write("- 'Depois a gente formaliza'")
     st.write("- 'É urgente'")
