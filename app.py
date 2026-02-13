@@ -3,9 +3,21 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime, date
 import os
+import time
 
 # Configuração da Página
 st.set_page_config(page_title="Status - Gestão Integral de Gates", layout="wide", page_icon="🏗️")
+
+# --- FUNÇÃO DE AUTO-REFRESH (5 MINUTOS) ---
+# Adiciona um timer invisível para recarregar a página e os dados da planilha
+# Essencial para o monitor fixo na fábrica
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+refresh_interval = 300 # 5 minutos em segundos
+if time.time() - st.session_state.last_refresh > refresh_interval:
+    st.session_state.last_refresh = time.time()
+    st.rerun()
 
 # Estilização Status
 st.markdown("""
@@ -36,7 +48,7 @@ st.sidebar.markdown("---")
 papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):", 
     ["PCP", "Dono do Pedido (DP)", "Produção", "Compras", "Financeiro", "Logística", "Gerência Geral"])
 
-# ORDENAÇÃO MANTIDA
+# ORDENAÇÃO MANTIDA CONFORME SOLICITADO
 menu = st.sidebar.radio("Navegação", 
     [
         "📊 Resumo e Prazos", 
@@ -140,9 +152,7 @@ elif menu == "🚨 Auditoria":
     st.subheader("Registros de Mini-Gates (Mudanças de Escopo)")
     try:
         df_aud = conn.read(worksheet="Alteracoes", ttl=0)
-        # Ajustado para exibir a coluna CTR no dataframe
         colunas_exibicao = ['Data', 'Pedido', 'CTR', 'Usuario', 'O que mudou', 'Impacto no Prazo', 'Impacto Financeiro']
-        # Verifica se as colunas existem antes de filtrar para evitar erro se a planilha não estiver atualizada
         colunas_reais = [col for col in colunas_exibicao if col in df_aud.columns]
         st.dataframe(df_aud[colunas_reais], use_container_width=True)
     except:
