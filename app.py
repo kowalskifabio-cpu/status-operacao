@@ -140,8 +140,8 @@ elif menu == "🚨 Auditoria":
     st.subheader("Registros de Mini-Gates (Mudanças de Escopo)")
     try:
         df_aud = conn.read(worksheet="Alteracoes", ttl=0)
-        # Exibindo a CTR na tabela de auditoria para facilitar conferência
-        st.table(df_aud)
+        # Exibindo a tabela com a coluna CTR
+        st.dataframe(df_aud, use_container_width=True)
     except:
         st.write("Sem registros de alteração.")
     st.markdown("---")
@@ -256,7 +256,7 @@ elif menu == "⚠️ Alteração de Pedido":
                         nova_alt = pd.DataFrame([{
                             "Data": datetime.now().strftime("%d/%m/%Y %H:%M"), 
                             "Pedido": pedido_alt, 
-                            "CTR": ctr_vinculada, # SALVANDO A CTR NA AUDITORIA
+                            "CTR": ctr_vinculada, # SALVANDO A CTR
                             "Usuario": papel_usuario, 
                             "O que mudou": mudanca, 
                             "Impacto no Prazo": impacto_p, 
