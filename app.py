@@ -17,22 +17,54 @@ if time.time() - st.session_state.last_refresh > refresh_interval:
     st.session_state.last_refresh = time.time()
     st.rerun()
 
-# Estilização Status
+# --- ESTILIZAÇÃO E ANIMAÇÕES (CSS) ---
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     h1, h2, h3 { color: #634D3E !important; }
     .stButton>button { background-color: #634D3E; color: white; border-radius: 5px; width: 100%; }
     .stInfo { background-color: #f0f2f6; border-left: 5px solid #B59572; }
+    
+    /* Animação para pedidos atrasados ou críticos */
+    @keyframes blinker {
+        50% { opacity: 0.3; }
+    }
+    .alerta-vencido {
+        color: white;
+        background-color: #FF0000;
+        padding: 5px;
+        border-radius: 5px;
+        font-weight: bold;
+        animation: blinker 1s linear infinite;
+        text-align: center;
+    }
+
+    /* Animação do Foguete */
+    @keyframes rocket-launch {
+        0% { transform: translateY(100vh) translateX(0px); opacity: 1; }
+        50% { transform: translateY(50vh) translateX(20px); }
+        100% { transform: translateY(-100vh) translateX(-20px); opacity: 0; }
+    }
+    .rocket-container {
+        position: fixed;
+        bottom: -100px;
+        left: 50%;
+        font-size: 50px;
+        z-index: 9999;
+        animation: rocket-launch 3s ease-in forwards;
+    }
     </style>
     """, unsafe_allow_html=True)
+
+# Função para disparar animação do foguete
+def disparar_foguete():
+    st.markdown('<div class="rocket-container">🚀</div>', unsafe_allow_html=True)
 
 # Conexão com Planilha
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- FUNÇÃO: ATUALIZA O STATUS NO RESUMO ---
 def atualizar_quadro_resumo(identificador_composto, novo_status):
-    # Extrai o nome do pedido da string composta "CTR / Pedido"
     nome_pedido = identificador_composto.split(" / ")[1]
     df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
     df_pedidos.loc[df_pedidos['Pedido'] == nome_pedido, 'Status_Atual'] = novo_status
@@ -70,14 +102,12 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
     
     try:
         df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
-        # Cria lista composta "CTR / Pedido" para a busca
         df_pedidos['Identificador'] = df_pedidos['CTR'].astype(str) + " / " + df_pedidos['Pedido']
         lista_pedidos = [""] + df_pedidos['Identificador'].tolist()
         
         pedido_sel = st.selectbox(f"Selecione o Pedido (CTR/Pedido) para {gate_id}", lista_pedidos, key=f"sel_{aba}")
         
         if pedido_sel:
-            # Extrai apenas o nome para conferir o status
             nome_real = pedido_sel.split(" / ")[1]
             status_atual = df_pedidos.loc[df_pedidos['Pedido'] == nome_real, 'Status_Atual'].values[0]
             
@@ -121,7 +151,7 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
                     
                     atualizar_quadro_resumo(pedido_sel, proximo_status)
                     st.success(f"🚀 Sucesso!")
-                    st.balloons()
+                    disparar_foguete() # TROCADO PARA FOGUETE
 
 # --- PÁGINAS ---
 
@@ -140,7 +170,21 @@ if menu == "📊 Resumo e Prazos":
             return "🟢 NO PRAZO"
             
         df_p['Alerta'] = df_p['Dias_Restantes'].apply(alerta_prazo)
-        st.dataframe(df_p[['Pedido', 'CTR', 'Dono', 'Status_Atual', 'Dias_Restantes', 'Alerta']].sort_values(by='Dias_Restantes', na_position='last'), use_container_width=True)
+        
+        # Aplica o efeito visual de piscar no monitor apenas para Vencidos e Críticos
+        st.subheader("Pedidos em Produção")
+        for idx, row in df_p.sort_values(by='Dias_Restantes', na_position='last').iterrows():
+            col_a, col_b, col_c, col_d = st.columns([2, 1, 2, 1])
+            with col_a: st.write(f"**{row['Pedido']}** (CTR: {row['CTR']})")
+            with col_b: st.write(f"👤 {row['Dono']}")
+            with col_c: st.write(f"📍 {row['Status_Atual']}")
+            with col_d:
+                if row['Alerta'] in ["❌ VENCIDO", "🔴 CRÍTICO"]:
+                    st.markdown(f'<div class="alerta-vencido">{row["Alerta"]} ({row["Dias_Restantes"]} dias)</div>', unsafe_allow_html=True)
+                else:
+                    st.write(f"{row['Alerta']}")
+            st.markdown("---")
+
     except Exception as e:
         st.error(f"Erro: {e}")
 
@@ -191,35 +235,36 @@ elif menu == "🆕 Novo Pedido":
                     st.success("Cadastrado!")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
-    itens = {"Informações": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais definidos", "Itens fora do padrão"], "Prazo": ["Prazo solicitado registrado", "Prazo avaliado", "Risco identificado"], "Governança": ["Dono definido", "PCP validou viabilidade", "Aprovado formalmente"]}
-    checklist_gate("GATE 1", "Checklist_G1", itens, "Dono do Pedido (DP)", "PCP", "Projeto incompleto ➡️ BLOQUEADO", "Aguardando Produção (G2)", "impedir entrada mal definida", "antes do plano")
+    itens = {"Informações Commercial": ["Pedido registrado no sistema", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais", "Itens fora do padrão"], "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado", "Risco de prazo"], "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Aprovado formalmente"]}
+    checklist_gate("GATE 1", "Checklist_G1", itens, "Dono do Pedido (DP)", "PCP", "Projeto incompleto ➡️ BLOQUEADO", "Aguardando Produção (G2)", "impedir entrada mal definida", "antes do planejamento")
 
 elif menu == "🏭 Gate 2: Produção":
     itens = {"Planejamento": ["Pedido sequenciado", "Capacidade validada", "Gargalo identificado", "Gargalo protegido"], "Projeto": ["Projeto técnico liberado", "Medidas conferidas", "Versão registrada"], "Comunicação": ["Produção ciente", "Prazo interno registrado", "Alterações registradas"]}
-    checklist_gate("GATE 2", "Checklist_G2", itens, "PCP", "Produção", "Fora de sequência ➡️ NÃO inicia", "Aguardando Materiais (G3)", "executar plano, não urgência", "antes de cortar")
+    checklist_gate("GATE 2", "Checklist_G2", itens, "PCP", "Produção", "Fora de sequência ➡️ NÃO inicia", "Aguardando Materiais (G3)", "garantir execução do plano", "antes de cortar")
 
 elif menu == "💰 Gate 3: Material":
-    itens = {"Materiais": ["Lista validada", "Quantidades conferidas", "Especiais identificados"], "Compras": ["Fornecedores definidos", "Lead times confirmados", "Datas registradas"], "Financeiro": ["Impacto caixa validado", "Compra autorizada", "Pagamento definido"]}
-    checklist_gate("GATE 3", "Checklist_G3", itens, "Financeiro", "Compras", "Material não comprado ➡️ BLOQUEADA", "Aguardando Entrega (G4)", "eliminar produção sem material", "antes do início físico")
+    itens = {"Materiais": ["Lista validada", "Quantidades conferidas", "Materiais especiais"], "Compras": ["Fornecedores definidos", "Lead times confirmados", "Datas registradas"], "Financeiro": ["Impacto caixa validado", "Compra autorizada", "Forma de pagamento"]}
+    checklist_gate("GATE 3", "Checklist_G3", itens, "Financeiro", "Compras", "Material crítico não comprado ➡️ BLOQUEADA", "Aguardando Entrega (G4)", "eliminar produção sem material", "antes do início físico")
 
 elif menu == "🚛 Gate 4: Entrega":
-    itens = {"Produto": ["Produção concluída", "Qualidade conferida", "Separados por pedido"], "Logística": ["Checklist carga", "Frota definida", "Rota planejada"], "Prazo": ["Data validada", "Cliente informado", "Montagem alinhada"]}
-    checklist_gate("GATE 4", "Checklist_G4", itens, "Dono do Pedido (DP)", "Logística", "Incompleto ➡️ NÃO autorizada", "CONCLUÍDO ✅", "entrega sem retrabalho", "antes de prometer data")
+    itens = {"Produto": ["Produção concluída", "Qualidade conferida", "Separados por pedido"], "Logística": ["Checklist carga", "Frota definida", "Rota planejada"], "Prazo": ["Data validada com logística", "Cliente informado", "Equipe montagem"]}
+    checklist_gate("GATE 4", "Checklist_G4", itens, "Dono do Pedido (DP)", "Logística", "Produto incompleto ➡️ NÃO autorizada", "CONCLUÍDO ✅", "garantir entrega sem retrabalho", "antes de prometer data")
 
 elif menu == "⚠️ Alteração de Pedido":
-    st.header("🔄 Alteração de Escopo")
+    st.header("🔄 Registro de Alteração de Escopo")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         df_p['Identificador'] = df_p['CTR'].astype(str) + " / " + df_p['Pedido']
-        pedido_alt = st.selectbox("Pedido (CTR/Pedido)", [""] + df_p['Identificador'].tolist())
+        pedido_alt = st.selectbox("Selecione o Pedido (CTR/Pedido)", [""] + df_p['Identificador'].tolist())
         if pedido_alt:
             nome_real = pedido_alt.split(" / ")[1]
             ctr_vinculada = df_p.loc[df_p['Pedido'] == nome_real, 'CTR'].values[0]
             with st.form("form_alt"):
                 mudanca = st.text_area("O que mudou?")
-                if st.form_submit_button("Registrar"):
+                if st.form_submit_button("Registrar Alteração"):
                     df_alt = conn.read(worksheet="Alteracoes", ttl=0)
                     nova = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": nome_real, "CTR": ctr_vinculada, "Usuario": papel_usuario, "O que mudou": mudanca}])
                     conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova], ignore_index=True))
-                    st.success("Registrado!")
-    except: st.error("Erro")
+                    st.success("Alteração registrada!")
+                    disparar_foguete()
+    except: st.error("Erro ao carregar dados.")
