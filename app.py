@@ -191,25 +191,29 @@ elif menu == "📦 Gestão por Pedido":
             itens_ctr = df_p[df_p['CTR'] == ctr_sel].copy()
             for idx, row in itens_ctr.iterrows():
                 with st.expander(f"Item: {row['Pedido']} | Status: {row['Status_Atual']}"):
-                    # CORREÇÃO: Chave única combinando ID_Item e índice real do DataFrame (idx) para evitar duplicidade
+                    # FIX: Chave única garantida adicionando o índice real da planilha (idx)
                     with st.form(f"form_edit_{row['ID_Item']}_{idx}"):
                         col1, col2 = st.columns(2)
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
-                        # Garante que a data atual seja carregada corretamente no seletor
-                        data_atual_item = pd.to_datetime(row['Data_Entrega']).date() if pd.notnull(row['Data_Entrega']) else date.today()
-                        n_data = col2.date_input("Nova Data de Entrega", value=data_atual_item)
+                        
+                        data_val = pd.to_datetime(row['Data_Entrega']).date() if pd.notnull(row['Data_Entrega']) else date.today()
+                        n_data = col2.date_input("Nova Data de Entrega", value=data_val)
+                        
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
                         
                         if st.form_submit_button("Salvar Alterações"):
-                            # Atualização forçando o formato string para a planilha não "perder" a data
+                            # ATUALIZAÇÃO SEGURA: Usamos o índice original da linha na planilha
                             df_p.loc[df_p.index == idx, 'Dono'] = n_gestor
                             df_p.loc[df_p.index == idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
                             conn.update(worksheet="Pedidos", data=df_p)
                             
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Mudança de Data/Gestor. Motivo: {n_motivo}"}])
+                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
                             conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, log], ignore_index=True))
-                            st.success("Atualizado!"); time.sleep(0.5); st.rerun()
+                            
+                            st.success("Item atualizado!")
+                            time.sleep(0.5)
+                            st.rerun()
     except Exception as e: st.error(f"Erro na gestão: {e}")
 
 elif menu == "📥 Importar Itens (Sistema)":
@@ -222,7 +226,7 @@ elif menu == "📥 Importar Itens (Sistema)":
                 df_base = conn.read(worksheet="Pedidos", ttl=0)
                 novos = []
                 for _, r in df_up.iterrows():
-                    # CORREÇÃO: Usando Id Programação para garantir unicidade real
+                    # FIX: Usando o ID Programação para evitar que itens iguais na mesma CTR se sobrescrevam
                     uid = f"{r['Centro de custo']}-{r['Id Programação']}"
                     if uid not in df_base['ID_Item'].astype(str).values:
                         novos.append({
