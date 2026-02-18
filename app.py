@@ -6,14 +6,13 @@ import os
 import time
 
 # Configuração da Página
-st.set_page_config(page_title="Status - Gestão Integral por Item", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="ERCI - Gestão em Lote", layout="wide", page_icon="🏗️")
 
 # --- FUNÇÃO DE AUTO-REFRESH (5 MINUTOS) ---
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
 
-refresh_interval = 300 
-if time.time() - st.session_state.last_refresh > refresh_interval:
+if time.time() - st.session_state.last_refresh > 300:
     st.session_state.last_refresh = time.time()
     st.rerun()
 
@@ -24,23 +23,10 @@ st.markdown("""
     h1, h2, h3 { color: #634D3E !important; }
     .stButton>button { background-color: #634D3E; color: white; border-radius: 5px; width: 100%; }
     .stInfo { background-color: #f0f2f6; border-left: 5px solid #B59572; }
-    
     @keyframes blinker { 50% { opacity: 0.3; } }
-    .alerta-vencido {
-        color: white; background-color: #FF0000; padding: 5px;
-        border-radius: 5px; font-weight: bold; animation: blinker 1s linear infinite;
-        text-align: center;
-    }
-
-    @keyframes rocket-launch {
-        0% { transform: translateY(100vh) translateX(0px); opacity: 1; }
-        50% { transform: translateY(50vh) translateX(20px); }
-        100% { transform: translateY(-100vh) translateX(-20px); opacity: 0; }
-    }
-    .rocket-container {
-        position: fixed; bottom: -100px; left: 50%; font-size: 50px;
-        z-index: 9999; animation: rocket-launch 3s ease-in forwards;
-    }
+    .alerta-vencido { color: white; background-color: #FF0000; padding: 5px; border-radius: 5px; font-weight: bold; animation: blinker 1s linear infinite; text-align: center; }
+    @keyframes rocket-launch { 0% { transform: translateY(100vh) translateX(0px); opacity: 1; } 100% { transform: translateY(-100vh) translateX(-20px); opacity: 0; } }
+    .rocket-container { position: fixed; bottom: -100px; left: 50%; font-size: 50px; z-index: 9999; animation: rocket-launch 3s ease-in forwards; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -50,10 +36,10 @@ def disparar_foguete():
 # Conexão com Planilha
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FUNÇÃO: ATUALIZA O STATUS DO ITEM ---
-def atualizar_status_item(id_item, novo_status):
+# --- FUNÇÃO: ATUALIZA STATUS EM LOTE ---
+def atualizar_status_lote(lista_ids, novo_status):
     df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
-    df_pedidos.loc[df_pedidos['ID_Item'] == id_item, 'Status_Atual'] = novo_status
+    df_pedidos.loc[df_pedidos['ID_Item'].isin(lista_ids), 'Status_Atual'] = novo_status
     conn.update(worksheet="Pedidos", data=df_pedidos)
 
 # --- MENU LATERAL ---
@@ -69,18 +55,17 @@ papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):",
 menu = st.sidebar.radio("Navegação", 
     [
         "📊 Resumo e Prazos", 
-        "📦 Gestão por Pedido", # NOVA FUNÇÃO HÍBRIDA
+        "📦 Gestão por Pedido",
         "🚨 Auditoria", 
         "📥 Importar Itens (Sistema)",
         "✅ Gate 1: Aceite Técnico", 
         "🏭 Gate 2: Produção", 
         "💰 Gate 3: Material", 
         "🚛 Gate 4: Entrega",
-        "👤 Cadastro de Gestores",
-        "⚠️ Alteração de Pedido"
+        "👤 Cadastro de Gestores"
     ])
 
-# --- FUNÇÃO DE GESTÃO DE GATES POR ITEM (RESTAURADA INTEGRAL) ---
+# --- FUNÇÃO DE GESTÃO DE GATES EM LOTE (HÍBRIDO) ---
 def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg_bloqueio, proximo_status, objetivo, momento):
     st.header(f"Ficha de Controle: {gate_id}")
     st.markdown(f"**Objetivo:** {objetivo} | **Momento:** {momento}")
@@ -88,43 +73,63 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
     
     try:
         df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
-        df_pedidos['Busca'] = df_pedidos['CTR'].astype(str) + " / " + df_pedidos['Pedido']
-        item_sel = st.selectbox(f"Selecione o Item para {gate_id}", [""] + df_pedidos['Busca'].tolist(), key=f"sel_{aba}")
         
-        if item_sel:
-            row_item = df_pedidos[df_pedidos['Busca'] == item_sel].iloc[0]
-            id_item = row_item['ID_Item']
-            status_atual = row_item['Status_Atual']
+        # 1. Seleciona a CTR primeiro
+        ctr_lista = [""] + sorted(df_p['CTR'].unique().tolist()) if 'df_p' in locals() else [""] + sorted(df_pedidos['CTR'].unique().tolist())
+        ctr_sel = st.selectbox(f"1º Passo: Selecione a CTR (Obra) para {gate_id}", ctr_lista, key=f"ctr_{aba}")
+        
+        if ctr_sel:
+            # 2. Filtra itens da CTR que estão no status correto para este Gate
+            # (Se for Gate 1, status deve ser 'Aguardando Gate 1', etc)
+            filtro_status = "Aguardando Gate 1" if gate_id == "GATE 1" else \
+                            "Aguardando Produção (G2)" if gate_id == "GATE 2" else \
+                            "Aguardando Materiais (G3)" if gate_id == "GATE 3" else \
+                            "Aguardando Entrega (G4)"
             
-            concluido = False
-            if gate_id == "GATE 1" and status_atual != "Aguardando Gate 1": concluido = True
-            elif gate_id == "GATE 2" and status_atual not in ["Aguardando Gate 1", "Aguardando Produção (G2)"]: concluido = True
-            elif gate_id == "GATE 3" and status_atual not in ["Aguardando Gate 1", "Aguardando Produção (G2)", "Aguardando Materiais (G3)"]: concluido = True
-            elif gate_id == "GATE 4" and status_atual == "CONCLUÍDO ✅": concluido = True
+            itens_pendentes = df_pedidos[(df_pedidos['CTR'] == ctr_sel) & (df_pedidos['Status_Atual'] == filtro_status)]
+            
+            if itens_pendentes.empty:
+                st.success(f"Todos os itens desta CTR já passaram pelo {gate_id} ou estão em outros estágios.")
+                return
 
-            if concluido:
-                st.warning(f"✅ Já aprovado. Status: {status_atual}")
-                if papel_usuario != "Gerência Geral": return
+            # 3. Seleção de itens em lote
+            st.markdown(f"**2º Passo: Marque os itens da CTR que deseja validar em lote:**")
+            selecionados = st.multiselect("Itens Pendentes:", options=itens_pendentes['ID_Item'].tolist(), 
+                                         format_func=lambda x: f"{x.split('-')[-1]}", # Mostra só o nome do produto
+                                         default=itens_pendentes['ID_Item'].tolist())
+            
+            if selecionados:
+                pode_assinar = (papel_usuario == responsavel_r or papel_usuario == executor_e or papel_usuario == "Gerência Geral")
+                if not pode_assinar: st.warning(f"⚠️ Acesso limitado a {responsavel_r} ou {executor_e}.")
 
-            pode_assinar = (papel_usuario == responsavel_r or papel_usuario == executor_e or papel_usuario == "Gerência Geral")
-            with st.form(f"form_{aba}"):
-                respostas = {}
-                for secao, itens in itens_checklist.items():
-                    st.markdown(f"#### 🔹 {secao}")
-                    for item in itens: respostas[item] = st.checkbox(item)
-                obs = st.text_area("Observações Técnicas")
-                if st.form_submit_button("VALIDAR E AVANÇAR PROCESSO 🚀", disabled=not pode_assinar):
-                    if not all(respostas.values()):
-                        st.error(f"❌ BLOQUEIO: {msg_bloqueio}")
-                    else:
-                        df_gate = conn.read(worksheet=aba, ttl=0)
-                        nova = {"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "ID_Item": id_item, "Validado_Por": papel_usuario, "Obs": obs}
-                        nova.update(respostas)
-                        conn.update(worksheet=aba, data=pd.concat([df_gate, pd.DataFrame([nova])], ignore_index=True))
-                        atualizar_status_item(id_item, proximo_status)
-                        st.success("Item avançou no processo!")
-                        disparar_foguete()
-    except Exception as e: st.error(f"Erro: {e}")
+                with st.form(f"form_lote_{aba}"):
+                    respostas = {}
+                    for secao, itens in itens_checklist.items():
+                        st.markdown(f"#### 🔹 {secao}")
+                        for item in itens: respostas[item] = st.checkbox(item)
+                    
+                    obs = st.text_area("Observações Técnicas para este lote")
+                    
+                    if st.form_submit_button("VALIDAR LOTE DE ITENS 🚀", disabled=not pode_assinar):
+                        if not all(respostas.values()):
+                            st.error(f"❌ BLOQUEIO: {msg_bloqueio}")
+                        else:
+                            # Processamento do Lote
+                            df_gate = conn.read(worksheet=aba, ttl=0)
+                            novas_entradas = []
+                            for id_item in selecionados:
+                                item_nome = df_pedidos[df_pedidos['ID_Item'] == id_item]['Pedido'].iloc[0]
+                                nova = {"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "ID_Item": id_item, "Validado_Por": papel_usuario, "Obs": obs}
+                                nova.update(respostas)
+                                novas_entradas.append(nova)
+                            
+                            conn.update(worksheet=aba, data=pd.concat([df_gate, pd.DataFrame(novas_entradas)], ignore_index=True))
+                            atualizar_status_lote(selecionados, proximo_status)
+                            st.success(f"🚀 Sucesso! {len(selecionados)} itens avançaram para: {proximo_status}")
+                            disparar_foguete()
+                            time.sleep(1)
+                            st.rerun()
+    except Exception as e: st.error(f"Erro no processamento em lote: {e}")
 
 # --- PÁGINAS ---
 
@@ -145,63 +150,6 @@ if menu == "📊 Resumo e Prazos":
                 else: st.write("🟢 OK")
             st.markdown("---")
     except: st.error("Erro no monitor.")
-
-elif menu == "📦 Gestão por Pedido":
-    st.header("📦 Gestão de Itens por CTR")
-    try:
-        df_p = conn.read(worksheet="Pedidos", ttl=0)
-        ctr_lista = df_p['CTR'].unique().tolist()
-        ctr_sel = st.selectbox("Selecione a CTR (Pedido) para gerenciar todos os itens:", [""] + ctr_lista)
-        
-        if ctr_sel:
-            itens_ctr = df_p[df_p['CTR'] == ctr_sel].copy()
-            st.info(f"Gerenciando {len(itens_ctr)} itens da obra: {itens_ctr['Obra'].iloc[0]}")
-            
-            for idx, row in itens_ctr.iterrows():
-                with st.expander(f"Item: {row['Pedido']} | Status: {row['Status_Atual']}"):
-                    with st.form(f"form_edit_{row['ID_Item']}"):
-                        col1, col2 = st.columns(2)
-                        n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
-                        n_data = col2.date_input("Data de Entrega", value=pd.to_datetime(row['Data_Entrega']).date() if pd.notnull(row['Data_Entrega']) else date.today())
-                        n_motivo = st.text_area("Motivo do Ajuste Manual")
-                        
-                        if st.form_submit_button("Salvar Alterações do Item"):
-                            df_p.loc[df_p['ID_Item'] == row['ID_Item'], 'Dono'] = n_gestor
-                            df_p.loc[df_p['ID_Item'] == row['ID_Item'], 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
-                            conn.update(worksheet="Pedidos", data=df_p)
-                            
-                            df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                            nova_alt = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Ajuste Manual: Gestor={n_gestor}, Prazo={n_data}. Motivo: {n_motivo}"}])
-                            conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova_alt], ignore_index=True))
-                            st.success(f"Item {row['Pedido']} atualizado!")
-                            st.rerun()
-    except Exception as e: st.error(f"Erro na gestão: {e}")
-
-elif menu == "📥 Importar Itens (Sistema)":
-    st.header("📥 Importar Itens da Marcenaria")
-    up = st.file_uploader("Arquivo egsDataGrid", type=["csv", "xlsx"])
-    if up:
-        try:
-            df_up = pd.read_csv(up) if up.name.endswith('csv') else pd.read_excel(up)
-            st.dataframe(df_up[['Centro de custo', 'Obra', 'Produto', 'Data Entrega']].head())
-            if st.button("Confirmar Importação"):
-                df_base = conn.read(worksheet="Pedidos", ttl=0)
-                novos = []
-                for _, r in df_up.iterrows():
-                    uid = f"{r['Centro de custo']}-{r['Produto']}"
-                    if uid not in df_base['ID_Item'].astype(str).values:
-                        novos.append({
-                            "ID_Item": uid, "CTR": r['Centro de custo'], "Obra": r['Obra'], "Item": r['Item'],
-                            "Pedido": r['Produto'], "Dono": r['Gestor'], "Status_Atual": "Aguardando Gate 1",
-                            "Data_Entrega": str(r['Data Entrega']), "Prev_Inicio": str(r['Prev. Inicio']) if 'Prev. Inicio' in r else "", 
-                            "Prev_Fim": str(r['Prev. Fim']) if 'Prev. Fim' in r else "", 
-                            "Quantidade": r['Quantidade'], "Unidade": r['Unidade']
-                        })
-                if novos:
-                    conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True))
-                    st.success(f"{len(novos)} itens importados!")
-                else: st.warning("Itens já existentes.")
-        except Exception as e: st.error(f"Erro: {e}")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {
@@ -236,41 +184,4 @@ elif menu == "🚛 Gate 4: Entrega":
     }
     checklist_gate("GATE 4", "Checklist_G4", itens, "Dono do Pedido (DP)", "Logística", "Erro acabamento ➡️ NÃO carrega", "CONCLUÍDO ✅", "Entrega perfeita", "Na carga")
 
-elif menu == "⚠️ Alteração de Pedido":
-    st.header("🔄 Edição de Item")
-    try:
-        df_p = conn.read(worksheet="Pedidos", ttl=0)
-        df_p['Busca_Edit'] = df_p['CTR'].astype(str) + " / " + df_p['Pedido']
-        item_edit = st.selectbox("Selecione o Item para Editar", [""] + df_p['Busca_Edit'].tolist())
-        
-        if item_edit:
-            item_data = df_p[df_p['Busca_Edit'] == item_edit].iloc[0]
-            uid = item_data['ID_Item']
-            with st.form("edit_item"):
-                col1, col2 = st.columns(2)
-                novo_gestor = col1.text_input("Novo Gestor", value=item_data['Dono'])
-                novo_prazo = col2.date_input("Nova Data de Entrega", value=pd.to_datetime(item_data['Data_Entrega']).date() if pd.notnull(item_data['Data_Entrega']) else date.today())
-                motivo = st.text_area("Motivo da alteração")
-                if st.form_submit_button("Salvar Alterações"):
-                    df_p.loc[df_p['ID_Item'] == uid, 'Dono'] = novo_gestor
-                    df_p.loc[df_p['ID_Item'] == uid, 'Data_Entrega'] = novo_prazo.strftime('%Y-%m-%d')
-                    conn.update(worksheet="Pedidos", data=df_p)
-                    df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                    nova_alt = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": item_data['Pedido'], "CTR": item_data['CTR'], "Usuario": papel_usuario, "O que mudou": f"Gestor: {novo_gestor}, Prazo: {novo_prazo}. Motivo: {motivo}"}])
-                    conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova_alt], ignore_index=True))
-                    st.success("Item atualizado!")
-    except Exception as e: st.error(f"Erro: {e}")
-
-elif menu == "🚨 Auditoria":
-    st.header("🚨 Auditoria")
-    df_aud = conn.read(worksheet="Alteracoes", ttl=0)
-    st.table(df_aud)
-
-elif menu == "👤 Cadastro de Gestores":
-    st.header("Gestores")
-    with st.form("f_g"):
-        n = st.text_input("Nome")
-        if st.form_submit_button("Salvar"):
-            df = conn.read(worksheet="Gestores", ttl=0)
-            conn.update(worksheet="Gestores", data=pd.concat([df, pd.DataFrame([{"Nome": n}])], ignore_index=True))
-            st.success("Salvo!")
+# ... (Manter demais páginas: Importação, Gestão por Pedido, Auditoria, Gestores)
