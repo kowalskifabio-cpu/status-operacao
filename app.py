@@ -25,7 +25,6 @@ st.markdown("""
     .stButton>button { background-color: #634D3E; color: white; border-radius: 5px; width: 100%; }
     .stInfo { background-color: #f0f2f6; border-left: 5px solid #B59572; }
     
-    /* Animação Pulsante para Atraso e Urgência */
     @keyframes pulse-red {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7); }
         70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 0, 0, 0); }
@@ -159,6 +158,7 @@ if menu == "📊 Resumo e Prazos":
     st.header("🚦 Monitor de Produção (Itens)")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
+        # Normalização rigorosa: Garante que o monitor leia apenas a data
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
         for idx, row in df_p.sort_values(by='Data_Entrega', na_position='last').iterrows():
             dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
@@ -184,10 +184,9 @@ if menu == "📊 Resumo e Prazos":
 elif menu == "📦 Gestão por Pedido":
     st.header("📦 Gestão de Itens por CTR")
     try:
-        # LEITURA E TRATAMENTO INICIAL
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        # Forçamos a coluna a ser string para evitar que o Pandas a corrompa durante o processamento
-        df_p['Data_Entrega'] = df_p['Data_Entrega'].astype(str).replace('nan', '')
+        # Trava 1: Normaliza a coluna para string YYYY-MM-DD assim que lê do Sheets
+        df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         
         ctr_lista = sorted(df_p['CTR'].unique().tolist())
         ctr_sel = st.selectbox("Selecione a CTR para gerenciar:", [""] + ctr_lista)
@@ -199,21 +198,16 @@ elif menu == "📦 Gestão por Pedido":
                         col1, col2 = st.columns(2)
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
                         
-                        # Conversão segura para exibição no date_input
-                        try:
-                            val_data = datetime.strptime(row['Data_Entrega'], '%Y-%m-%d').date() if row['Data_Entrega'] else date.today()
-                        except:
-                            val_data = date.today()
-                            
-                        n_data = col2.date_input("Nova Data de Entrega", value=val_data)
+                        # Conversão segura para o widget de data
+                        data_val = datetime.strptime(row['Data_Entrega'], '%Y-%m-%d').date() if row['Data_Entrega'] else date.today()
+                        n_data = col2.date_input("Nova Data de Entrega", value=data_val)
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
                         
                         if st.form_submit_button("Salvar Alterações"):
-                            # ATUALIZAÇÃO NO DATAFRAME ORIGINAL VIA ÍNDICE
+                            # Trava 2: Grava explicitamente no formato texto curto
                             df_p.at[idx, 'Dono'] = n_gestor
                             df_p.at[idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
                             
-                            # SALVAMENTO DO DATAFRAME COMPLETO
                             conn.update(worksheet="Pedidos", data=df_p)
                             
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
@@ -236,17 +230,23 @@ elif menu == "📥 Importar Itens (Sistema)":
                 novos = []
                 for _, r in df_up.iterrows():
                     uid = f"{r['Centro de custo']}-{r['Id Programação']}"
+                    
+                    # Trava 3: Sanitização de data no momento da carga (Remoção de horas e minutos)
+                    dt_crua = pd.to_datetime(r['Data Entrega'], errors='coerce')
+                    dt_limpa = dt_crua.strftime('%Y-%m-%d') if pd.notnull(dt_crua) else ""
+                    
                     if uid not in df_base['ID_Item'].astype(str).values:
                         novos.append({
                             "ID_Item": uid, "CTR": r['Centro de custo'], "Obra": r['Obra'], "Item": r['Item'],
                             "Pedido": r['Produto'], "Dono": r['Gestor'], "Status_Atual": "Aguardando Gate 1",
-                            "Data_Entrega": str(r['Data Entrega']), "Prev_Inicio": str(r['Prev. Inicio']) if 'Prev. Inicio' in r else "", 
+                            "Data_Entrega": dt_limpa, "Prev_Inicio": str(r['Prev. Inicio']) if 'Prev. Inicio' in r else "", 
                             "Prev_Fim": str(r['Prev. Fim']) if 'Prev. Fim' in r else "", 
                             "Quantidade": r['Quantidade'], "Unidade": r['Unidade']
                         })
                 if novos: conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True)); st.success("Importado!")
         except Exception as e: st.error(f"Erro na importação: {e}")
 
+# --- OS GATES PERMANECEM INTEGRAIS ---
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {"Informações Comerciais": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais", "Itens fora do padrão"], "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado", "Risco de prazo"], "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Aprovado formalmente"]}
     checklist_gate("GATE 1", "Checklist_G1", itens, "Dono do Pedido (DP)", "PCP", "Projeto incompleto ➡️ BLOQUEADO", "Aguardando Produção (G2)", "Impedir entrada mal definida", "Antes do plano")
@@ -289,7 +289,9 @@ elif menu == "⚠️ Alteração de Pedido":
             with st.form("edit_item_unit"):
                 col1, col2 = st.columns(2)
                 novo_gestor = col1.text_input("Novo Gestor", value=item_data['Dono'])
-                novo_prazo = col2.date_input("Nova Data de Entrega", value=pd.to_datetime(item_data['Data_Entrega']).date() if pd.notnull(item_data['Data_Entrega']) else date.today())
+                # Proteção extra na edição unitária
+                dt_edit = pd.to_datetime(item_data['Data_Entrega'], errors='coerce').date() if pd.notnull(item_data['Data_Entrega']) else date.today()
+                novo_prazo = col2.date_input("Nova Data de Entrega", value=dt_edit)
                 if st.form_submit_button("Salvar"):
                     df_p.loc[df_p['ID_Item'] == uid, 'Dono'] = novo_gestor
                     df_p.loc[df_p['ID_Item'] == uid, 'Data_Entrega'] = novo_prazo.strftime('%Y-%m-%d')
