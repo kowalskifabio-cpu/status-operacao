@@ -187,19 +187,16 @@ elif menu == "📉 Monitor por Pedido (CTR)":
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
         
-        # Agrupamento por CTR focado no Gestor e Prazo Crítico
         ctrs = df_p.groupby('CTR').agg({
             'Pedido': 'count',
             'Data_Entrega': 'min',
-            'Dono': 'first', # Pega o gestor associado à obra
+            'Dono': 'first',
             'Status_Atual': lambda x: list(x)
         }).reset_index()
         
         for _, row in ctrs.sort_values(by='Data_Entrega').iterrows():
             total_itens = row['Pedido']
             concluidos = row['Status_Atual'].count("CONCLUÍDO ✅")
-            
-            # Lógica de Urgência (Item mais crítico manda no alerta da obra)
             dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
             
             if dias is None: status_html = '<span style="color: grey;">⚪ SEM DATA</span>'
@@ -209,14 +206,10 @@ elif menu == "📉 Monitor por Pedido (CTR)":
             
             with st.container():
                 c1, c2, c3 = st.columns([4, 3, 3])
-                # Removido prefixo "Obra:" para visual clean
                 c1.markdown(f"### {row['CTR']}")
                 c1.write(f"📅 Entrega Crítica: {row['Data_Entrega'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega']) else 'S/D'}")
-                
-                # Substituído progresso visual pelo nome do Gestor
                 c2.markdown(f"👤 **Gestor:** {row['Dono']}")
                 c2.write(f"📦 Itens: {concluidos}/{total_itens} concluídos")
-                
                 c3.markdown(status_html, unsafe_allow_html=True)
                 st.markdown("---")
     except Exception as e: st.error(f"Erro no monitor por pedido: {e}")
@@ -225,7 +218,6 @@ elif menu == "📦 Gestão por Pedido":
     st.header("📦 Gestão de Itens por CTR")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        # Trava de Segurança: Força a data a ser string YYYY-MM-DD para não sumir no Sheets
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         
         ctr_lista = sorted(df_p['CTR'].unique().tolist())
@@ -237,27 +229,20 @@ elif menu == "📦 Gestão por Pedido":
                     with st.form(f"form_edit_{row['ID_Item']}_{idx}"):
                         col1, col2 = st.columns(2)
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
-                        
                         try:
                             val_data = datetime.strptime(row['Data_Entrega'], '%Y-%m-%d').date() if row['Data_Entrega'] else date.today()
                         except:
                             val_data = date.today()
-                            
                         n_data = col2.date_input("Nova Data de Entrega", value=val_data)
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
-                        
                         if st.form_submit_button("Salvar Alterações"):
                             df_p.at[idx, 'Dono'] = n_gestor
                             df_p.at[idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
                             conn.update(worksheet="Pedidos", data=df_p)
-                            
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
                             log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Alteração Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
                             conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, log], ignore_index=True))
-                            
-                            st.success("Item atualizado!")
-                            time.sleep(0.5)
-                            st.rerun()
+                            st.success("Item atualizado!"); time.sleep(0.5); st.rerun()
     except Exception as e: st.error(f"Erro na gestão: {e}")
 
 elif menu == "📥 Importar Itens (Sistema)":
@@ -273,7 +258,6 @@ elif menu == "📥 Importar Itens (Sistema)":
                     uid = f"{r['Centro de custo']}-{r['Id Programação']}"
                     dt_crua = pd.to_datetime(r['Data Entrega'], errors='coerce')
                     dt_limpa = dt_crua.strftime('%Y-%m-%d') if pd.notnull(dt_crua) else ""
-                    
                     if uid not in df_base['ID_Item'].astype(str).values:
                         novos.append({
                             "ID_Item": uid, "CTR": r['Centro de custo'], "Obra": r['Obra'], "Item": r['Item'],
@@ -285,6 +269,80 @@ elif menu == "📥 Importar Itens (Sistema)":
                 if novos: conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True)); st.success("Importado!")
         except Exception as e: st.error(f"Erro na importação: {e}")
 
+# --- MELHORIA: ALTERAÇÃO DE PEDIDO EM LOTE (IGUAL AOS GATES) ---
+elif menu == "⚠️ Alteração de Pedido":
+    st.header("🔄 Alteração de Pedido em Lote")
+    st.markdown("**Objetivo:** Ajustar prazos ou gestores de múltiplos itens simultaneamente.")
+    try:
+        df_p = conn.read(worksheet="Pedidos", ttl=0)
+        # Normalização para evitar erros de data
+        df_p['Data_Entrega_Str'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        
+        ctr_lista = [""] + sorted(df_p['CTR'].unique().tolist())
+        ctr_sel = st.selectbox("Selecione a CTR para Alteração", ctr_lista, key="ctr_alteracao")
+        
+        if ctr_sel:
+            itens_da_ctr = df_p[df_p['CTR'] == ctr_sel]
+            
+            selecionados = st.multiselect(
+                "Selecione os itens que serão alterados:",
+                options=itens_da_ctr['ID_Item'].tolist(),
+                format_func=lambda x: f"{itens_da_ctr[itens_da_ctr['ID_Item'] == x]['Pedido'].iloc[0]} (Status: {itens_da_ctr[itens_da_ctr['ID_Item'] == x]['Status_Atual'].iloc[0]})",
+                default=itens_da_ctr['ID_Item'].tolist()
+            )
+            
+            if selecionados:
+                with st.form("form_alteracao_lote"):
+                    st.info(f"Alterando {len(selecionados)} itens da CTR {ctr_sel}")
+                    col1, col2 = st.columns(2)
+                    
+                    # Sugere o gestor atual do primeiro item selecionado
+                    gestor_atual = itens_da_ctr[itens_da_ctr['ID_Item'] == selecionados[0]]['Dono'].iloc[0]
+                    novo_gestor = col1.text_input("Novo Gestor Responsável", value=gestor_atual)
+                    
+                    # Sugere a data atual do primeiro item selecionado
+                    data_atual_str = itens_da_ctr[itens_da_ctr['ID_Item'] == selecionados[0]]['Data_Entrega_Str'].iloc[0]
+                    try:
+                        data_sugerida = datetime.strptime(data_atual_str, '%Y-%m-%d').date() if data_atual_str else date.today()
+                    except:
+                        data_sugerida = date.today()
+                        
+                    nova_data = col2.date_input("Nova Data de Entrega", value=data_sugerida)
+                    motivo = st.text_area("Motivo da Alteração em Lote", placeholder="Ex: Atraso no fornecedor de ferragens / Reagendamento cliente")
+                    
+                    if st.form_submit_button("APLICAR ALTERAÇÕES EM LOTE 🚀"):
+                        if not motivo:
+                            st.error("❌ Por favor, descreva o motivo da alteração para a auditoria.")
+                        else:
+                            # Atualiza os itens no DataFrame principal
+                            df_p.loc[df_p['ID_Item'].isin(selecionados), 'Dono'] = novo_gestor
+                            df_p.loc[df_p['ID_Item'].isin(selecionados), 'Data_Entrega'] = nova_data.strftime('%Y-%m-%d')
+                            
+                            # Remove a coluna auxiliar antes de salvar
+                            df_save = df_p.drop(columns=['Data_Entrega_Str'])
+                            conn.update(worksheet="Pedidos", data=df_save)
+                            
+                            # Registra na Auditoria
+                            df_alt = conn.read(worksheet="Alteracoes", ttl=0)
+                            logs_novos = []
+                            for id_item in selecionados:
+                                item_nome = itens_da_ctr[itens_da_ctr['ID_Item'] == id_item]['Pedido'].iloc[0]
+                                logs_novos.append({
+                                    "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                                    "Pedido": item_nome,
+                                    "CTR": ctr_sel,
+                                    "Usuario": papel_usuario,
+                                    "O que mudou": f"LOTE: Nova Data {nova_data} / Novo Gestor {novo_gestor}. Motivo: {motivo}"
+                                })
+                            conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, pd.DataFrame(logs_novos)], ignore_index=True))
+                            
+                            st.success(f"✅ {len(selecionados)} itens atualizados com sucesso!")
+                            disparar_foguete()
+                            time.sleep(1)
+                            st.rerun()
+    except Exception as e: st.error(f"Erro na alteração em lote: {e}")
+
+# --- GATES E OUTROS MANTIDOS INTEGRAIS ---
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {"Informações Comerciais": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais", "Itens fora do padrão"], "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado", "Risco de prazo"], "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Aprovado formalmente"]}
     checklist_gate("GATE 1", "Checklist_G1", itens, "Dono do Pedido (DP)", "PCP", "Projeto incompleto ➡️ BLOQUEADO", "Aguardando Produção (G2)", "Impedir entrada mal definida", "Antes do plano")
@@ -314,24 +372,3 @@ elif menu == "👤 Cadastro de Gestores":
             df = conn.read(worksheet="Gestores", ttl=0)
             conn.update(worksheet="Gestores", data=pd.concat([df, pd.DataFrame([{"Nome": n}])], ignore_index=True))
             st.success("Salvo!")
-
-elif menu == "⚠️ Alteração de Pedido":
-    st.header("🔄 Edição Unitária")
-    try:
-        df_p = conn.read(worksheet="Pedidos", ttl=0)
-        df_p['Busca_Edit'] = df_p['CTR'].astype(str) + " / " + df_p['Pedido']
-        item_edit = st.selectbox("Selecione o Item para Editar", [""] + df_p['Busca_Edit'].tolist())
-        if item_edit:
-            item_data = df_p[df_p['Busca_Edit'] == item_edit].iloc[0]
-            uid = item_data['ID_Item']
-            with st.form("edit_item_unit"):
-                col1, col2 = st.columns(2)
-                novo_gestor = col1.text_input("Novo Gestor", value=item_data['Dono'])
-                dt_edit = pd.to_datetime(item_data['Data_Entrega'], errors='coerce').date() if pd.notnull(item_data['Data_Entrega']) else date.today()
-                novo_prazo = col2.date_input("Nova Data de Entrega", value=dt_edit)
-                if st.form_submit_button("Salvar"):
-                    df_p.loc[df_p['ID_Item'] == uid, 'Dono'] = novo_gestor
-                    df_p.loc[df_p['ID_Item'] == uid, 'Data_Entrega'] = novo_prazo.strftime('%Y-%m-%d')
-                    conn.update(worksheet="Pedidos", data=df_p)
-                    st.success("Atualizado!")
-    except Exception as e: st.error(f"Erro na edição unitária: {e}")
