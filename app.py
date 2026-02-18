@@ -52,6 +52,15 @@ st.markdown("""
         display: block;
     }
 
+    /* Estilo para o Semáforo Redondo */
+    .semaforo {
+        height: 12px;
+        width: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 5px;
+    }
+
     @keyframes rocket-launch {
         0% { transform: translateY(100vh) translateX(0px); opacity: 1; }
         50% { transform: translateY(50vh) translateX(20px); }
@@ -185,31 +194,47 @@ elif menu == "📉 Monitor por Pedido (CTR)":
     st.header("📉 Monitor de Produção por CTR")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
+        df_p['Data_Entrega_DT'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
         
+        # Agrupamento para visão geral
         ctrs = df_p.groupby('CTR').agg({
-            'Pedido': 'count',
-            'Data_Entrega': 'min',
-            'Dono': 'first',
-            'Status_Atual': lambda x: list(x)
+            'ID_Item': 'count',
+            'Data_Entrega_DT': 'min',
+            'Dono': 'first'
         }).reset_index()
         
-        for _, row in ctrs.sort_values(by='Data_Entrega').iterrows():
-            total_itens = row['Pedido']
-            concluidos = row['Status_Atual'].count("CONCLUÍDO ✅")
-            dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
+        for _, row in ctrs.sort_values(by='Data_Entrega_DT').iterrows():
+            ctr_sel = row['CTR']
+            itens_obra = df_p[df_p['CTR'] == ctr_sel].copy()
+            total_itens = len(itens_obra)
+            concluidos = len(itens_obra[itens_obra['Status_Atual'] == "CONCLUÍDO ✅"])
             
-            if dias is None: status_html = '<span style="color: grey;">⚪ SEM DATA</span>'
-            elif dias < 0: status_html = f'<div class="alerta-pulsante">❌ ATRASO CRÍTICO</div>'
-            elif dias <= 3: status_html = f'<div class="alerta-pulsante">🔴 URGENTE</div>'
-            else: status_html = '<div class="no-prazo">🟢 NO PRAZO</div>'
+            dias = (row['Data_Entrega_DT'].date() - date.today()).days if pd.notnull(row['Data_Entrega_DT']) else None
             
+            # Melhoria PCP: Botão Popover para Detalhamento
             with st.container():
                 c1, c2, c3 = st.columns([4, 3, 3])
-                c1.markdown(f"### {row['CTR']}")
-                c1.write(f"📅 Entrega Crítica: {row['Data_Entrega'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega']) else 'S/D'}")
+                c1.markdown(f"### {ctr_sel}")
+                c1.write(f"📅 Entrega Crítica: {row['Data_Entrega_DT'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega_DT']) else 'S/D'}")
+                
                 c2.markdown(f"👤 **Gestor:** {row['Dono']}")
-                c2.write(f"📦 Itens: {concluidos}/{total_itens} concluídos")
+                
+                # Popover "Fantasma" para explodir itens
+                with c2.popover(f"🔍 Detalhar Itens ({total_itens})", use_container_width=True):
+                    st.markdown(f"**Composição da CTR {ctr_sel}**")
+                    for _, item in itens_obra.iterrows():
+                        # Lógica do Semáforo Redondo por Item
+                        i_dias = (pd.to_datetime(item['Data_Entrega']).date() - date.today()).days if pd.notnull(item['Data_Entrega']) else None
+                        cor = "#28a745" if i_dias is not None and i_dias > 3 else "#FF0000" if i_dias is not None else "grey"
+                        circulo = f'<span class="semaforo" style="background-color: {cor};"></span>'
+                        
+                        st.markdown(f"{circulo} **{item['Pedido']}** | 📅 {pd.to_datetime(item['Data_Entrega']).strftime('%d/%m') if pd.notnull(item['Data_Entrega']) else 'S/D'}", unsafe_allow_html=True)
+
+                if dias is None: status_html = '<span style="color: grey;">⚪ SEM DATA</span>'
+                elif dias < 0: status_html = f'<div class="alerta-pulsante">❌ ATRASO CRÍTICO</div>'
+                elif dias <= 3: status_html = f'<div class="alerta-pulsante">🔴 URGENTE</div>'
+                else: status_html = '<div class="no-prazo">🟢 NO PRAZO</div>'
+                
                 c3.markdown(status_html, unsafe_allow_html=True)
                 st.markdown("---")
     except Exception as e: st.error(f"Erro no monitor por pedido: {e}")
@@ -219,7 +244,6 @@ elif menu == "📦 Gestão por Pedido":
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-        
         ctr_lista = sorted(df_p['CTR'].unique().tolist())
         ctr_sel = st.selectbox("Selecione a CTR para gerenciar:", [""] + ctr_lista)
         if ctr_sel:
@@ -231,8 +255,7 @@ elif menu == "📦 Gestão por Pedido":
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
                         try:
                             val_data = datetime.strptime(row['Data_Entrega'], '%Y-%m-%d').date() if row['Data_Entrega'] else date.today()
-                        except:
-                            val_data = date.today()
+                        except: val_data = date.today()
                         n_data = col2.date_input("Nova Data de Entrega", value=val_data)
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
                         if st.form_submit_button("Salvar Alterações"):
@@ -240,7 +263,7 @@ elif menu == "📦 Gestão por Pedido":
                             df_p.at[idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
                             conn.update(worksheet="Pedidos", data=df_p)
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Alteração Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
+                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
                             conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, log], ignore_index=True))
                             st.success("Item atualizado!"); time.sleep(0.5); st.rerun()
     except Exception as e: st.error(f"Erro na gestão: {e}")
@@ -269,80 +292,40 @@ elif menu == "📥 Importar Itens (Sistema)":
                 if novos: conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True)); st.success("Importado!")
         except Exception as e: st.error(f"Erro na importação: {e}")
 
-# --- MELHORIA: ALTERAÇÃO DE PEDIDO EM LOTE (IGUAL AOS GATES) ---
 elif menu == "⚠️ Alteração de Pedido":
     st.header("🔄 Alteração de Pedido em Lote")
-    st.markdown("**Objetivo:** Ajustar prazos ou gestores de múltiplos itens simultaneamente.")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        # Normalização para evitar erros de data
         df_p['Data_Entrega_Str'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-        
         ctr_lista = [""] + sorted(df_p['CTR'].unique().tolist())
         ctr_sel = st.selectbox("Selecione a CTR para Alteração", ctr_lista, key="ctr_alteracao")
-        
         if ctr_sel:
             itens_da_ctr = df_p[df_p['CTR'] == ctr_sel]
-            
-            selecionados = st.multiselect(
-                "Selecione os itens que serão alterados:",
-                options=itens_da_ctr['ID_Item'].tolist(),
-                format_func=lambda x: f"{itens_da_ctr[itens_da_ctr['ID_Item'] == x]['Pedido'].iloc[0]} (Status: {itens_da_ctr[itens_da_ctr['ID_Item'] == x]['Status_Atual'].iloc[0]})",
-                default=itens_da_ctr['ID_Item'].tolist()
-            )
-            
+            selecionados = st.multiselect("Selecione os itens:", options=itens_da_ctr['ID_Item'].tolist(), format_func=lambda x: f"{itens_da_ctr[itens_da_ctr['ID_Item'] == x]['Pedido'].iloc[0]} (Status: {itens_da_ctr[itens_da_ctr['ID_Item'] == x]['Status_Atual'].iloc[0]})", default=itens_da_ctr['ID_Item'].tolist())
             if selecionados:
                 with st.form("form_alteracao_lote"):
-                    st.info(f"Alterando {len(selecionados)} itens da CTR {ctr_sel}")
+                    st.info(f"Alterando {len(selecionados)} itens")
                     col1, col2 = st.columns(2)
-                    
-                    # Sugere o gestor atual do primeiro item selecionado
                     gestor_atual = itens_da_ctr[itens_da_ctr['ID_Item'] == selecionados[0]]['Dono'].iloc[0]
-                    novo_gestor = col1.text_input("Novo Gestor Responsável", value=gestor_atual)
-                    
-                    # Sugere a data atual do primeiro item selecionado
-                    data_atual_str = itens_da_ctr[itens_da_ctr['ID_Item'] == selecionados[0]]['Data_Entrega_Str'].iloc[0]
-                    try:
-                        data_sugerida = datetime.strptime(data_atual_str, '%Y-%m-%d').date() if data_atual_str else date.today()
-                    except:
-                        data_sugerida = date.today()
-                        
-                    nova_data = col2.date_input("Nova Data de Entrega", value=data_sugerida)
-                    motivo = st.text_area("Motivo da Alteração em Lote", placeholder="Ex: Atraso no fornecedor de ferragens / Reagendamento cliente")
-                    
+                    novo_gestor = col1.text_input("Novo Gestor", value=gestor_atual)
+                    data_at = itens_da_ctr[itens_da_ctr['ID_Item'] == selecionados[0]]['Data_Entrega_Str'].iloc[0]
+                    try: data_sug = datetime.strptime(data_at, '%Y-%m-%d').date() if data_at else date.today()
+                    except: data_sug = date.today()
+                    nova_data = col2.date_input("Nova Data", value=data_sug)
+                    motivo = st.text_area("Motivo")
                     if st.form_submit_button("APLICAR ALTERAÇÕES EM LOTE 🚀"):
-                        if not motivo:
-                            st.error("❌ Por favor, descreva o motivo da alteração para a auditoria.")
+                        if not motivo: st.error("❌ Descreva o motivo")
                         else:
-                            # Atualiza os itens no DataFrame principal
                             df_p.loc[df_p['ID_Item'].isin(selecionados), 'Dono'] = novo_gestor
                             df_p.loc[df_p['ID_Item'].isin(selecionados), 'Data_Entrega'] = nova_data.strftime('%Y-%m-%d')
-                            
-                            # Remove a coluna auxiliar antes de salvar
                             df_save = df_p.drop(columns=['Data_Entrega_Str'])
                             conn.update(worksheet="Pedidos", data=df_save)
-                            
-                            # Registra na Auditoria
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                            logs_novos = []
-                            for id_item in selecionados:
-                                item_nome = itens_da_ctr[itens_da_ctr['ID_Item'] == id_item]['Pedido'].iloc[0]
-                                logs_novos.append({
-                                    "Data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                                    "Pedido": item_nome,
-                                    "CTR": ctr_sel,
-                                    "Usuario": papel_usuario,
-                                    "O que mudou": f"LOTE: Nova Data {nova_data} / Novo Gestor {novo_gestor}. Motivo: {motivo}"
-                                })
-                            conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, pd.DataFrame(logs_novos)], ignore_index=True))
-                            
-                            st.success(f"✅ {len(selecionados)} itens atualizados com sucesso!")
-                            disparar_foguete()
-                            time.sleep(1)
-                            st.rerun()
-    except Exception as e: st.error(f"Erro na alteração em lote: {e}")
+                            logs = [{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": itens_da_ctr[itens_da_ctr['ID_Item'] == id]['Pedido'].iloc[0], "CTR": ctr_sel, "Usuario": papel_usuario, "O que mudou": f"LOTE: Data {nova_data} / Gestor {novo_gestor}. Motivo: {motivo}"} for id in selecionados]
+                            conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, pd.DataFrame(logs)], ignore_index=True))
+                            st.success("Atualizados!"); disparar_foguete(); time.sleep(1); st.rerun()
+    except Exception as e: st.error(f"Erro: {e}")
 
-# --- GATES E OUTROS MANTIDOS INTEGRAIS ---
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {"Informações Comerciais": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais", "Itens fora do padrão"], "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado", "Risco de prazo"], "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Aprovado formalmente"]}
     checklist_gate("GATE 1", "Checklist_G1", itens, "Dono do Pedido (DP)", "PCP", "Projeto incompleto ➡️ BLOQUEADO", "Aguardando Produção (G2)", "Impedir entrada mal definida", "Antes do plano")
