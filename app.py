@@ -87,10 +87,12 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
     
     try:
         df_pedidos = conn.read(worksheet="Pedidos", ttl=0)
-        df_pedidos['Busca'] = df_pedidos['CTR'].astype(str) + " / " + df_pedidos['Item'].astype(str) + " - " + df_pedidos['Pedido'].str[:40]
+        # AJUSTE: Usando a coluna 'Pedido' (Produto curto) para exibição, ocultando a descrição técnica
+        df_pedidos['Busca'] = df_pedidos['CTR'].astype(str) + " / " + df_pedidos['Pedido']
         item_sel = st.selectbox(f"Selecione o Item para {gate_id}", [""] + df_pedidos['Busca'].tolist(), key=f"sel_{aba}")
         
         if item_sel:
+            # Localiza pelo identificador composto que agora está limpo
             row_item = df_pedidos[df_pedidos['Busca'] == item_sel].iloc[0]
             id_item = row_item['ID_Item']
             status_atual = row_item['Status_Atual']
@@ -133,15 +135,17 @@ if menu == "📥 Importar Itens (Sistema)":
     if up:
         try:
             df_up = pd.read_csv(up) if up.name.endswith('csv') else pd.read_excel(up)
-            st.dataframe(df_up[['Centro de custo', 'Obra', 'Item', 'Produto', 'Data Entrega']].head())
+            # Mostra apenas colunas essenciais no preview
+            st.dataframe(df_up[['Centro de custo', 'Obra', 'Produto', 'Data Entrega']].head())
             if st.button("Confirmar Importação"):
                 df_base = conn.read(worksheet="Pedidos", ttl=0)
                 novos = []
                 for _, r in df_up.iterrows():
-                    uid = f"{r['Centro de custo']}-{r['Item']}"
+                    # O UID agora é CentroCusto-Produto para ser único e limpo
+                    uid = f"{r['Centro de custo']}-{r['Produto']}"
                     if uid not in df_base['ID_Item'].astype(str).values:
                         novos.append({
-                            "ID_Item": uid, "CTR": r['Centro de custo'], "Obra": r['Obra'], "Item": r['Item'],
+                            "ID_Item": uid, "CTR": r['Centro de custo'], "Obra": r['Obra'], "Item": r['Item'], # 'Item' guardado na planilha mas não exibido
                             "Pedido": r['Produto'], "Dono": r['Gestor'], "Status_Atual": "Aguardando Gate 1",
                             "Data_Entrega": str(r['Data Entrega']), "Prev_Inicio": str(r['Prev. Inicio']) if 'Prev. Inicio' in r else "", 
                             "Prev_Fim": str(r['Prev. Fim']) if 'Prev. Fim' in r else "", 
@@ -151,7 +155,7 @@ if menu == "📥 Importar Itens (Sistema)":
                     conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True))
                     st.success(f"{len(novos)} itens importados!")
                 else: st.warning("Itens já existentes.")
-        except Exception as e: st.error(f"Erro no Excel. Verifique se 'openpyxl' está instalado. Detalhe: {e}")
+        except Exception as e: st.error(f"Erro: {e}")
 
 elif menu == "📊 Resumo e Prazos":
     st.header("🚦 Monitor de Produção (Itens)")
@@ -162,8 +166,8 @@ elif menu == "📊 Resumo e Prazos":
             dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
             classe = "alerta-vencido" if dias is not None and dias <= 3 else ""
             c1, c2, c3, c4 = st.columns([2, 4, 2, 1])
-            with c1: st.write(f"**{row['CTR']}**\nItem: {row['Item']}")
-            with c2: st.write(f"**{row['Pedido']}**\n👤 {row['Dono']}")
+            with c1: st.write(f"**{row['CTR']}**")
+            with c2: st.write(f"**{row['Pedido']}**\n👤 {row['Dono']}") # 'Pedido' aqui é o nome curto (Produto)
             with c3: st.write(f"📍 {row['Status_Atual']}\n📅 {row['Data_Entrega'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega']) else 'S/D'}")
             with c4:
                 if classe: st.markdown(f'<div class="{classe}">⚠️ ALERTA</div>', unsafe_allow_html=True)
@@ -208,7 +212,7 @@ elif menu == "⚠️ Alteração de Pedido":
     st.header("🔄 Edição de Item")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        df_p['Busca_Edit'] = df_p['CTR'].astype(str) + " / " + df_p['Item'].astype(str) + " - " + df_p['Pedido'].str[:40]
+        df_p['Busca_Edit'] = df_p['CTR'].astype(str) + " / " + df_p['Pedido']
         item_edit = st.selectbox("Selecione o Item para Editar", [""] + df_p['Busca_Edit'].tolist())
         
         if item_edit:
@@ -227,8 +231,8 @@ elif menu == "⚠️ Alteração de Pedido":
                     df_alt = conn.read(worksheet="Alteracoes", ttl=0)
                     nova_alt = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": item_data['Pedido'], "CTR": item_data['CTR'], "Usuario": papel_usuario, "O que mudou": f"Gestor: {novo_gestor}, Prazo: {novo_prazo}. Motivo: {motivo}"}])
                     conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, nova_alt], ignore_index=True))
-                    st.success("Item atualizado e auditado!")
-    except Exception as e: st.error(f"Erro ao carregar dados: {e}")
+                    st.success("Item atualizado!")
+    except Exception as e: st.error(f"Erro: {e}")
 
 elif menu == "🚨 Auditoria":
     st.header("🚨 Auditoria")
