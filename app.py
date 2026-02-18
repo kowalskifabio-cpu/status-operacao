@@ -25,7 +25,6 @@ st.markdown("""
     .stButton>button { background-color: #634D3E; color: white; border-radius: 5px; width: 100%; }
     .stInfo { background-color: #f0f2f6; border-left: 5px solid #B59572; }
     
-    /* Animação Pulsante para Atraso e Urgência */
     @keyframes pulse-red {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7); }
         70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 0, 0, 0); }
@@ -185,30 +184,39 @@ elif menu == "📦 Gestão por Pedido":
     st.header("📦 Gestão de Itens por CTR")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        ctr_lista = df_p['CTR'].unique().tolist()
+        # Garantir que a coluna de data seja string para não corromper ao salvar
+        df_p['Data_Entrega'] = df_p['Data_Entrega'].astype(str)
+        
+        ctr_lista = sorted(df_p['CTR'].unique().tolist())
         ctr_sel = st.selectbox("Selecione a CTR para gerenciar:", [""] + ctr_lista)
         if ctr_sel:
             itens_ctr = df_p[df_p['CTR'] == ctr_sel].copy()
             for idx, row in itens_ctr.iterrows():
                 with st.expander(f"Item: {row['Pedido']} | Status: {row['Status_Atual']}"):
-                    # FIX: Chave única garantida adicionando o índice real da planilha (idx)
                     with st.form(f"form_edit_{row['ID_Item']}_{idx}"):
                         col1, col2 = st.columns(2)
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
                         
-                        data_val = pd.to_datetime(row['Data_Entrega']).date() if pd.notnull(row['Data_Entrega']) else date.today()
-                        n_data = col2.date_input("Nova Data de Entrega", value=data_val)
-                        
+                        # Carregar data atual de forma segura
+                        data_string = row['Data_Entrega']
+                        try:
+                            data_formatada = datetime.strptime(data_string, '%Y-%m-%d').date() if data_string and data_string != 'nan' else date.today()
+                        except:
+                            data_formatada = date.today()
+                            
+                        n_data = col2.date_input("Nova Data de Entrega", value=data_formatada)
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
                         
                         if st.form_submit_button("Salvar Alterações"):
-                            # ATUALIZAÇÃO SEGURA: Usamos o índice original da linha na planilha
-                            df_p.loc[df_p.index == idx, 'Dono'] = n_gestor
-                            df_p.loc[df_p.index == idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
+                            # ATUALIZAÇÃO SEGURA: Alteramos APENAS esta linha no DataFrame original
+                            df_p.at[idx, 'Dono'] = n_gestor
+                            df_p.at[idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
+                            
+                            # SALVAR O DATAFRAME INTEIRO DE VOLTA (Garante que as outras linhas não sumam)
                             conn.update(worksheet="Pedidos", data=df_p)
                             
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
+                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Mudança: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
                             conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, log], ignore_index=True))
                             
                             st.success("Item atualizado!")
@@ -226,7 +234,7 @@ elif menu == "📥 Importar Itens (Sistema)":
                 df_base = conn.read(worksheet="Pedidos", ttl=0)
                 novos = []
                 for _, r in df_up.iterrows():
-                    # FIX: Usando o ID Programação para evitar que itens iguais na mesma CTR se sobrescrevam
+                    # Unicidade por ID Programação
                     uid = f"{r['Centro de custo']}-{r['Id Programação']}"
                     if uid not in df_base['ID_Item'].astype(str).values:
                         novos.append({
@@ -237,7 +245,7 @@ elif menu == "📥 Importar Itens (Sistema)":
                             "Quantidade": r['Quantidade'], "Unidade": r['Unidade']
                         })
                 if novos: conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True)); st.success("Importado!")
-        except Exception as e: st.error(f"Erro na importação: {e}")
+        except Exception as e: st.error(f"Erro: {e}")
 
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {"Informações Comerciais": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais", "Itens fora do padrão"], "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado", "Risco de prazo"], "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Aprovado formalmente"]}
@@ -287,4 +295,4 @@ elif menu == "⚠️ Alteração de Pedido":
                     df_p.loc[df_p['ID_Item'] == uid, 'Data_Entrega'] = novo_prazo.strftime('%Y-%m-%d')
                     conn.update(worksheet="Pedidos", data=df_p)
                     st.success("Atualizado!")
-    except Exception as e: st.error(f"Erro na edição unitária: {e}")
+    except Exception as e: st.error(f"Erro na edição: {e}")
