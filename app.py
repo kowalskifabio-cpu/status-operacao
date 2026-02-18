@@ -191,20 +191,26 @@ elif menu == "📦 Gestão por Pedido":
             itens_ctr = df_p[df_p['CTR'] == ctr_sel].copy()
             for idx, row in itens_ctr.iterrows():
                 with st.expander(f"Item: {row['Pedido']} | Status: {row['Status_Atual']}"):
-                    # CORREÇÃO: Chave única combinando ID_Item e índice da linha (idx)
+                    # CORREÇÃO: Chave única combinando ID_Item e índice real do DataFrame (idx) para evitar duplicidade
                     with st.form(f"form_edit_{row['ID_Item']}_{idx}"):
                         col1, col2 = st.columns(2)
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
-                        n_data = col2.date_input("Nova Data de Entrega", value=pd.to_datetime(row['Data_Entrega']).date() if pd.notnull(row['Data_Entrega']) else date.today())
+                        # Garante que a data atual seja carregada corretamente no seletor
+                        data_atual_item = pd.to_datetime(row['Data_Entrega']).date() if pd.notnull(row['Data_Entrega']) else date.today()
+                        n_data = col2.date_input("Nova Data de Entrega", value=data_atual_item)
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
+                        
                         if st.form_submit_button("Salvar Alterações"):
-                            df_p.loc[df_p.index == idx, ['Dono', 'Data_Entrega']] = [n_gestor, n_data.strftime('%Y-%m-%d')]
+                            # Atualização forçando o formato string para a planilha não "perder" a data
+                            df_p.loc[df_p.index == idx, 'Dono'] = n_gestor
+                            df_p.loc[df_p.index == idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
                             conn.update(worksheet="Pedidos", data=df_p)
+                            
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
                             log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Mudança de Data/Gestor. Motivo: {n_motivo}"}])
                             conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, log], ignore_index=True))
                             st.success("Atualizado!"); time.sleep(0.5); st.rerun()
-    except Exception as e: st.error(f"Erro: {e}")
+    except Exception as e: st.error(f"Erro na gestão: {e}")
 
 elif menu == "📥 Importar Itens (Sistema)":
     st.header("📥 Importar Itens da Marcenaria")
@@ -216,7 +222,7 @@ elif menu == "📥 Importar Itens (Sistema)":
                 df_base = conn.read(worksheet="Pedidos", ttl=0)
                 novos = []
                 for _, r in df_up.iterrows():
-                    # CORREÇÃO: Usando Id Programação do seu arquivo original para garantir ID único por peça
+                    # CORREÇÃO: Usando Id Programação para garantir unicidade real
                     uid = f"{r['Centro de custo']}-{r['Id Programação']}"
                     if uid not in df_base['ID_Item'].astype(str).values:
                         novos.append({
@@ -268,7 +274,7 @@ elif menu == "⚠️ Alteração de Pedido":
         if item_edit:
             item_data = df_p[df_p['Busca_Edit'] == item_edit].iloc[0]
             uid = item_data['ID_Item']
-            with st.form("edit_item"):
+            with st.form("edit_item_unit"):
                 col1, col2 = st.columns(2)
                 novo_gestor = col1.text_input("Novo Gestor", value=item_data['Dono'])
                 novo_prazo = col2.date_input("Nova Data de Entrega", value=pd.to_datetime(item_data['Data_Entrega']).date() if pd.notnull(item_data['Data_Entrega']) else date.today())
@@ -277,4 +283,4 @@ elif menu == "⚠️ Alteração de Pedido":
                     df_p.loc[df_p['ID_Item'] == uid, 'Data_Entrega'] = novo_prazo.strftime('%Y-%m-%d')
                     conn.update(worksheet="Pedidos", data=df_p)
                     st.success("Atualizado!")
-    except Exception as e: st.error(f"Erro na edição: {e}")
+    except Exception as e: st.error(f"Erro na edição unitária: {e}")
