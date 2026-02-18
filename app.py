@@ -89,7 +89,7 @@ papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):",
 menu = st.sidebar.radio("Navegação", 
     [
         "📊 Resumo e Prazos (Itens)", 
-        "📉 Monitor por Pedido (CTR)", # NOVA MELHORIA
+        "📉 Monitor por Pedido (CTR)", 
         "📦 Gestão por Pedido",
         "🚨 Auditoria", 
         "📥 Importar Itens (Sistema)",
@@ -182,38 +182,40 @@ if menu == "📊 Resumo e Prazos (Itens)":
     except Exception as e: st.error(f"Erro no monitor: {e}")
 
 elif menu == "📉 Monitor por Pedido (CTR)":
-    st.header("📉 Monitor de Produção por Obra (CTR)")
+    st.header("📉 Monitor de Produção por CTR")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
         
-        # Agrupamento por CTR para visão executiva
+        # Agrupamento por CTR focado no Gestor e Prazo Crítico
         ctrs = df_p.groupby('CTR').agg({
             'Pedido': 'count',
             'Data_Entrega': 'min',
+            'Dono': 'first', # Pega o gestor associado à obra
             'Status_Atual': lambda x: list(x)
         }).reset_index()
         
         for _, row in ctrs.sort_values(by='Data_Entrega').iterrows():
             total_itens = row['Pedido']
             concluidos = row['Status_Atual'].count("CONCLUÍDO ✅")
-            progresso = concluidos / total_itens if total_itens > 0 else 0
             
-            # Lógica de Urgência do Pedido (Baseada no item mais crítico)
+            # Lógica de Urgência (Item mais crítico manda no alerta da obra)
             dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
             
             if dias is None: status_html = '<span style="color: grey;">⚪ SEM DATA</span>'
-            elif dias < 0: status_html = f'<div class="alerta-pulsante">❌ ATRASO NA OBRA</div>'
-            elif dias <= 3: status_html = f'<div class="alerta-pulsante">🔴 PEDIDO URGENTE</div>'
-            else: status_html = '<div class="no-prazo">🟢 OBRA NO PRAZO</div>'
+            elif dias < 0: status_html = f'<div class="alerta-pulsante">❌ ATRASO CRÍTICO</div>'
+            elif dias <= 3: status_html = f'<div class="alerta-pulsante">🔴 URGENTE</div>'
+            else: status_html = '<div class="no-prazo">🟢 NO PRAZO</div>'
             
             with st.container():
-                c1, c2, c3 = st.columns([3, 4, 3])
-                c1.markdown(f"### Obra: {row['CTR']}")
-                c1.write(f"📅 Entrega mais próxima: {row['Data_Entrega'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega']) else 'S/D'}")
+                c1, c2, c3 = st.columns([4, 3, 3])
+                # Removido prefixo "Obra:" para visual clean
+                c1.markdown(f"### {row['CTR']}")
+                c1.write(f"📅 Entrega Crítica: {row['Data_Entrega'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega']) else 'S/D'}")
                 
-                c2.write(f"📊 Progresso: {concluidos}/{total_itens} itens concluídos")
-                c2.progress(progresso)
+                # Substituído progresso visual pelo nome do Gestor
+                c2.markdown(f"👤 **Gestor:** {row['Dono']}")
+                c2.write(f"📦 Itens: {concluidos}/{total_itens} concluídos")
                 
                 c3.markdown(status_html, unsafe_allow_html=True)
                 st.markdown("---")
@@ -223,6 +225,7 @@ elif menu == "📦 Gestão por Pedido":
     st.header("📦 Gestão de Itens por CTR")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
+        # Trava de Segurança: Força a data a ser string YYYY-MM-DD para não sumir no Sheets
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         
         ctr_lista = sorted(df_p['CTR'].unique().tolist())
@@ -249,7 +252,7 @@ elif menu == "📦 Gestão por Pedido":
                             conn.update(worksheet="Pedidos", data=df_p)
                             
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
-                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
+                            log = pd.DataFrame([{"Data": datetime.now().strftime("%d/%m/%Y %H:%M"), "Pedido": row['Pedido'], "CTR": row['CTR'], "Usuario": papel_usuario, "O que mudou": f"Alteração Manual: Data {n_data} / Gestor {n_gestor}. Motivo: {n_motivo}"}])
                             conn.update(worksheet="Alteracoes", data=pd.concat([df_alt, log], ignore_index=True))
                             
                             st.success("Item atualizado!")
@@ -282,7 +285,6 @@ elif menu == "📥 Importar Itens (Sistema)":
                 if novos: conn.update(worksheet="Pedidos", data=pd.concat([df_base, pd.DataFrame(novos)], ignore_index=True)); st.success("Importado!")
         except Exception as e: st.error(f"Erro na importação: {e}")
 
-# --- OS GATES PERMANECEM INTEGRAIS ---
 elif menu == "✅ Gate 1: Aceite Técnico":
     itens = {"Informações Comerciais": ["Pedido registrado", "Cliente identificado", "Tipo de obra definido", "Responsável identificado"], "Escopo Técnico": ["Projeto mínimo recebido", "Ambientes definidos", "Materiais principais", "Itens fora do padrão"], "Prazo (prévia)": ["Prazo solicitado registrado", "Prazo avaliado", "Risco de prazo"], "Governança": ["Dono do Pedido definido", "PCP validou viabilidade", "Aprovado formalmente"]}
     checklist_gate("GATE 1", "Checklist_G1", itens, "Dono do Pedido (DP)", "PCP", "Projeto incompleto ➡️ BLOQUEADO", "Aguardando Produção (G2)", "Impedir entrada mal definida", "Antes do plano")
