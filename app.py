@@ -88,7 +88,8 @@ papel_usuario = st.sidebar.selectbox("Seu Papel Hoje (ERCI):",
 
 menu = st.sidebar.radio("Navegação", 
     [
-        "📊 Resumo e Prazos", 
+        "📊 Resumo e Prazos (Itens)", 
+        "📉 Monitor por Pedido (CTR)", # NOVA MELHORIA
         "📦 Gestão por Pedido",
         "🚨 Auditoria", 
         "📥 Importar Itens (Sistema)",
@@ -154,11 +155,10 @@ def checklist_gate(gate_id, aba, itens_checklist, responsavel_r, executor_e, msg
 
 # --- PÁGINAS ---
 
-if menu == "📊 Resumo e Prazos":
+if menu == "📊 Resumo e Prazos (Itens)":
     st.header("🚦 Monitor de Produção (Itens)")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        # Normalização rigorosa: Garante que o monitor leia apenas a data
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
         for idx, row in df_p.sort_values(by='Data_Entrega', na_position='last').iterrows():
             dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
@@ -181,11 +181,48 @@ if menu == "📊 Resumo e Prazos":
             st.markdown("---")
     except Exception as e: st.error(f"Erro no monitor: {e}")
 
+elif menu == "📉 Monitor por Pedido (CTR)":
+    st.header("📉 Monitor de Produção por Obra (CTR)")
+    try:
+        df_p = conn.read(worksheet="Pedidos", ttl=0)
+        df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce')
+        
+        # Agrupamento por CTR para visão executiva
+        ctrs = df_p.groupby('CTR').agg({
+            'Pedido': 'count',
+            'Data_Entrega': 'min',
+            'Status_Atual': lambda x: list(x)
+        }).reset_index()
+        
+        for _, row in ctrs.sort_values(by='Data_Entrega').iterrows():
+            total_itens = row['Pedido']
+            concluidos = row['Status_Atual'].count("CONCLUÍDO ✅")
+            progresso = concluidos / total_itens if total_itens > 0 else 0
+            
+            # Lógica de Urgência do Pedido (Baseada no item mais crítico)
+            dias = (row['Data_Entrega'].date() - date.today()).days if pd.notnull(row['Data_Entrega']) else None
+            
+            if dias is None: status_html = '<span style="color: grey;">⚪ SEM DATA</span>'
+            elif dias < 0: status_html = f'<div class="alerta-pulsante">❌ ATRASO NA OBRA</div>'
+            elif dias <= 3: status_html = f'<div class="alerta-pulsante">🔴 PEDIDO URGENTE</div>'
+            else: status_html = '<div class="no-prazo">🟢 OBRA NO PRAZO</div>'
+            
+            with st.container():
+                c1, c2, c3 = st.columns([3, 4, 3])
+                c1.markdown(f"### Obra: {row['CTR']}")
+                c1.write(f"📅 Entrega mais próxima: {row['Data_Entrega'].strftime('%d/%m/%Y') if pd.notnull(row['Data_Entrega']) else 'S/D'}")
+                
+                c2.write(f"📊 Progresso: {concluidos}/{total_itens} itens concluídos")
+                c2.progress(progresso)
+                
+                c3.markdown(status_html, unsafe_allow_html=True)
+                st.markdown("---")
+    except Exception as e: st.error(f"Erro no monitor por pedido: {e}")
+
 elif menu == "📦 Gestão por Pedido":
     st.header("📦 Gestão de Itens por CTR")
     try:
         df_p = conn.read(worksheet="Pedidos", ttl=0)
-        # Trava 1: Normaliza a coluna para string YYYY-MM-DD assim que lê do Sheets
         df_p['Data_Entrega'] = pd.to_datetime(df_p['Data_Entrega'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         
         ctr_lista = sorted(df_p['CTR'].unique().tolist())
@@ -198,16 +235,17 @@ elif menu == "📦 Gestão por Pedido":
                         col1, col2 = st.columns(2)
                         n_gestor = col1.text_input("Gestor Responsável", value=row['Dono'])
                         
-                        # Conversão segura para o widget de data
-                        data_val = datetime.strptime(row['Data_Entrega'], '%Y-%m-%d').date() if row['Data_Entrega'] else date.today()
-                        n_data = col2.date_input("Nova Data de Entrega", value=data_val)
+                        try:
+                            val_data = datetime.strptime(row['Data_Entrega'], '%Y-%m-%d').date() if row['Data_Entrega'] else date.today()
+                        except:
+                            val_data = date.today()
+                            
+                        n_data = col2.date_input("Nova Data de Entrega", value=val_data)
                         n_motivo = st.text_area("Motivo do Ajuste Manual")
                         
                         if st.form_submit_button("Salvar Alterações"):
-                            # Trava 2: Grava explicitamente no formato texto curto
                             df_p.at[idx, 'Dono'] = n_gestor
                             df_p.at[idx, 'Data_Entrega'] = n_data.strftime('%Y-%m-%d')
-                            
                             conn.update(worksheet="Pedidos", data=df_p)
                             
                             df_alt = conn.read(worksheet="Alteracoes", ttl=0)
@@ -230,8 +268,6 @@ elif menu == "📥 Importar Itens (Sistema)":
                 novos = []
                 for _, r in df_up.iterrows():
                     uid = f"{r['Centro de custo']}-{r['Id Programação']}"
-                    
-                    # Trava 3: Sanitização de data no momento da carga (Remoção de horas e minutos)
                     dt_crua = pd.to_datetime(r['Data Entrega'], errors='coerce')
                     dt_limpa = dt_crua.strftime('%Y-%m-%d') if pd.notnull(dt_crua) else ""
                     
@@ -289,7 +325,6 @@ elif menu == "⚠️ Alteração de Pedido":
             with st.form("edit_item_unit"):
                 col1, col2 = st.columns(2)
                 novo_gestor = col1.text_input("Novo Gestor", value=item_data['Dono'])
-                # Proteção extra na edição unitária
                 dt_edit = pd.to_datetime(item_data['Data_Entrega'], errors='coerce').date() if pd.notnull(item_data['Data_Entrega']) else date.today()
                 novo_prazo = col2.date_input("Nova Data de Entrega", value=dt_edit)
                 if st.form_submit_button("Salvar"):
